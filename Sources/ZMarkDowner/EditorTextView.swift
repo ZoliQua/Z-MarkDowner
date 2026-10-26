@@ -119,16 +119,17 @@ final class EditorTextView: NSTextView {
     @objc func insertFootnote(_ sender: Any?) {
         var n = 1
         while nsString.range(of: "[^\(n)]").location != NSNotFound { n += 1 }
-        let sel = selectedRange()
+        let insertAt = NSMaxRange(selectedRange())
         let placeholder = L("placeholder.footnote", "Footnote text")
-        undoManager?.beginUndoGrouping()
-        replace(NSRange(location: NSMaxRange(sel), length: 0), with: "[^\(n)]")
-        let end = nsString.length
-        let separator = string.hasSuffix("\n\n") ? "" : (string.hasSuffix("\n") ? "\n" : "\n\n")
-        let definition = separator + "[^\(n)]: "
-        replace(NSRange(location: end, length: 0), with: definition + placeholder,
-                select: NSRange(location: (definition as NSString).length, length: (placeholder as NSString).length))
-        undoManager?.endUndoGrouping()
+        // One replacement from the caret to the end = a single undo step
+        let tail = nsString.substring(from: insertAt)
+        let whole = nsString.substring(to: insertAt) + tail
+        let separator = whole.hasSuffix("\n\n") ? "" : (whole.hasSuffix("\n") ? "\n" : "\n\n")
+        let marker = "[^\(n)]"
+        let replacement = marker + tail + separator + "[^\(n)]: " + placeholder
+        let placeholderStart = (replacement as NSString).length - (placeholder as NSString).length
+        replace(NSRange(location: insertAt, length: nsString.length - insertAt), with: replacement,
+                select: NSRange(location: placeholderStart, length: (placeholder as NSString).length))
     }
 
     // MARK: - Line (block) formatting
@@ -502,7 +503,7 @@ final class EditorTextView: NSTextView {
         if pb.string(forType: .string) == nil,
            let data = pb.data(forType: .png)
             ?? pb.data(forType: .tiff).flatMap({ NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) }) {
-            if let path = ImageStore.store(data: data, ext: "png", suggestedName: L("image.pasted", "image"),
+            if let path = ImageStore.store(data: data, ext: "png", suggestedName: "image",
                                            for: markdownDocument, window: window) {
                 replace(range, with: "![](\(path))")
             }

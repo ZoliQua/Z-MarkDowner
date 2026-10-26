@@ -19,6 +19,8 @@ final class PreviewView: NSView, WKNavigationDelegate, WKScriptMessageHandler {
 
     /// Called when the user scrolls the preview: source line (fractional), or -1 for "end of document".
     var onScroll: ((Double) -> Void)?
+    /// Number of scroll messages received from the page (diagnostics).
+    private(set) var scrollMessageCount = 0
 
     override init(frame frameRect: NSRect) {
         let config = WKWebViewConfiguration()
@@ -158,6 +160,7 @@ final class PreviewView: NSView, WKNavigationDelegate, WKScriptMessageHandler {
     // MARK: WKScriptMessageHandler
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "scroll" { scrollMessageCount += 1 }
         if message.name == "scroll", let line = message.body as? Double {
             onScroll?(line)
         } else if message.name == "scroll", let line = message.body as? Int {

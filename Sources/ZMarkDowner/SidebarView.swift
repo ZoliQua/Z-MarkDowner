@@ -21,7 +21,7 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSO
     private let folderButton = NSButton()
     private let emptyLabel = NSTextField(labelWithString: "")
 
-    private var headings: [Heading] = []
+    private(set) var headings: [Heading] = []
     private var currentHeadingIndex: Int?
     private var rootNode: FileNode?
     var currentFile: URL? { didSet { filesOutline.reloadData() } }
@@ -215,7 +215,7 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSO
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
-        panel.prompt = L("button.choose", "Choose")
+        panel.prompt = L("button.chooseShort", "Choose")
         guard let window else { return }
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url else { return }

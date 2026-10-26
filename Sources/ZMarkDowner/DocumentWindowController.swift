@@ -12,8 +12,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     private let mainSplit = NSSplitView()
     private let contentSplit = NSSplitView()
-    private let sidebar = SidebarView(frame: .zero)
-    private let editorScroll = NSScrollView()
+    let sidebar = SidebarView(frame: .zero)
+    let editorScroll = NSScrollView()
     private(set) var editor: EditorTextView!
     let preview = PreviewView(frame: .zero)
     private let statusLabel = NSTextField(labelWithString: "")

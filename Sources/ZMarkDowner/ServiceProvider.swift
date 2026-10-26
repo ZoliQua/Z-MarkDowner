@@ -5,6 +5,10 @@ import MarkDownerCore
 /// Declared in Info.plist (NSServices); the message names match the methods below.
 final class ServiceProvider: NSObject {
 
+    /// Shows the converted files in Finder (disabled by the self test).
+    static var revealResults = true
+    static var lastResults: [URL] = []
+
     @objc func convertToPDF(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
         run(pboard, .pdf)
     }
@@ -42,7 +46,8 @@ final class ServiceProvider: NSObject {
                     failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
                 }
             }
-            if !written.isEmpty { NSWorkspace.shared.activateFileViewerSelecting(written) }
+            if !written.isEmpty, Self.revealResults { NSWorkspace.shared.activateFileViewerSelecting(written) }
+            Self.lastResults = written
             if !failures.isEmpty {
                 let alert = NSAlert()
                 alert.messageText = L("export.failed", "Export failed")
