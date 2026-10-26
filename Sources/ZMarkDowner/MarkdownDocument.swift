@@ -97,15 +97,15 @@ final class MarkdownDocument: NSDocument {
 
     // MARK: Printing
 
-    override func printOperation(withSettings printSettings: [NSPrintInfo.AttributeKey: Any]) throws -> NSPrintOperation {
-        windowController?.commitEditing()
-        let info = PDFExporter.printInfo()
-        info.dictionary().addEntries(from: printSettings)
-        let view = try PDFExporter.printableView(markdown: text, title: displayName,
-                                                 baseURL: baseDirectory, printInfo: info)
-        let op = NSPrintOperation(view: view, printInfo: info)
-        op.jobTitle = displayName
-        return op
+    /// Printing renders the document exactly like the PDF export (WebKit), asynchronously.
+    override func printDocument(_ sender: Any?) {
+        windowController?.printRendered()
+    }
+
+    override var fileURL: URL? {
+        didSet {
+            if oldValue != fileURL { windowController?.documentLocationChanged() }
+        }
     }
 
     /// Directory used to resolve relative image paths.

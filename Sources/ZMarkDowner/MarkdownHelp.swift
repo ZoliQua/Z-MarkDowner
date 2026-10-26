@@ -1,50 +1,93 @@
+import Foundation
+
 enum MarkdownHelp {
-    static let text = """
-    # Markdown gyorstalpaló
+    /// Localized guide (`<lang>.lproj/Help.md`), falling back to the English text below.
+    static var text: String {
+        if let url = Bundle.main.url(forResource: "Help", withExtension: "md"),
+           let localized = try? String(contentsOf: url, encoding: .utf8) {
+            return localized
+        }
+        return english
+    }
 
-    Ez a dokumentum bemutatja a leggyakoribb Markdown elemeket. Nézd meg **osztott nézetben** (⌘2)!
+    static let english = """
+    ---
+    title: Markdown Guide
+    subtitle: Everything Z-MarkDowner can do
+    ---
 
-    ## Szövegformázás
+    Open the **split view** (⌘2) to see the source and the result side by side.
 
-    - **Félkövér** – `**szöveg**` (⌘B)
-    - *Dőlt* – `*szöveg*` (⌘I)
-    - ~~Áthúzott~~ – `~~szöveg~~` (⇧⌘X)
-    - `Kód` – `` `kód` `` (⌘`)
-    - [Link](https://hu.wikipedia.org/wiki/Markdown) – `[szöveg](cím)` (⌘K)
+    ## Text formatting
 
-    ## Címsorok
+    - **Bold** – `**text**` (⌘B)
+    - *Italic* – `*text*` (⌘I)
+    - ~~Strikethrough~~ – `~~text~~` (⇧⌘X)
+    - `Code` – `` `code` `` (⌘`)
+    - [Link](https://en.wikipedia.org/wiki/Markdown) – `[text](address)` (⌘K)
 
-    `# Címsor 1` … `###### Címsor 6` (⌥⌘1 … ⌥⌘6)
+    ## Headings
 
-    ## Listák
+    `# Heading 1` … `###### Heading 6` (⌥⌘1 … ⌥⌘6). The **sidebar** (⌃⌘S) lists them as an outline.
 
-    1. Számozott lista (⇧⌘7)
-    2. Második elem
-        - Beágyazott elem (Tab-bal behúzható)
+    ## Lists
 
-    - [x] Elvégzett feladat
-    - [ ] Teendő (⇧⌘9)
+    1. Numbered list (⇧⌘7)
+    2. Second item
+        - Nested item (indent with Tab)
 
-    > Idézet (⇧⌘')
+    - [x] Done
+    - [ ] To do (⇧⌘9)
 
-    ## Táblázat
+    > Quote (⇧⌘')
 
-    | Funkció | Billentyű |
-    |:--------|:---------:|
-    | Szerkesztő | ⌘1 |
-    | Osztott nézet | ⌘2 |
-    | Végleges nézet | ⌘3 |
-    | Teljes képernyő | ⌃⌘F |
+    ## Tables
 
-    ## Kódblokk
+    | Feature | Shortcut |
+    |:--------|:--------:|
+    | Editor | ⌘1 |
+    | Split view | ⌘2 |
+    | Final view | ⌘3 |
+    | Full screen | ⌃⌘F |
+
+    Inside a table, **Tab** jumps to the next cell and aligns the columns; **Return** adds a row.
+
+    ## Code
 
     ```swift
-    print("Helló, világ!")
+    func greet(_ name: String) -> String {
+        return "Hello, \\(name)!"   // syntax highlighted
+    }
     ```
+
+    ## Footnotes
+
+    Markdown supports footnotes[^1].
+
+    [^1]: The footnote text appears at the end of the document — and as a real footnote in Word.
+
+    ## Formulas and diagrams
+
+    Inline: $e^{i\\pi} + 1 = 0$
+
+    $$
+    \\int_0^1 x^2\\,dx = \\frac{1}{3}
+    $$
+
+    ```mermaid
+    graph LR
+        A[Markdown] --> B[PDF]
+        A --> C[Word]
+        A --> D[EPUB]
+    ```
+
+    ## Images
+
+    Paste a screenshot (⌘V) or drag an image into the editor: it is saved into an `images` folder next to the document.
 
     ---
 
-    **Export:** Fájl ▸ Exportálás PDF-be (⇧⌘E) vagy Word (DOCX) formátumba (⇧⌘D).
-    **Import:** Fájl ▸ Megnyitás (⌘O) – DOCX, DOC, RTF, TXT és MD fájlok.
+    **Export:** File ▸ Export ▸ PDF (⇧⌘E), Word (⇧⌘D), HTML or EPUB.
+    **Import:** File ▸ Open (⌘O) – DOCX, DOC, RTF, TXT and MD files.
     """
 }

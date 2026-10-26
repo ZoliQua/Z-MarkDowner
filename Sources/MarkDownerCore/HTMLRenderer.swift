@@ -1,55 +1,135 @@
 import Foundation
 
-public enum HTMLRenderer {
+public struct HTMLRenderer {
 
-    /// Optional rewriting of image sources (e.g. to resolve relative paths).
-    public typealias URLTransform = (String) -> String
+    public struct Options {
+        /// Rewrites image sources (e.g. to resolve relative paths or embed data URIs).
+        public var imageURL: ((String) -> String)?
+        /// Adds `data-line` attributes to top-level blocks (used for scroll synchronisation).
+        public var sourceLines = false
+        /// Self-closing tags for XHTML output (EPUB).
+        public var xhtml = false
+        public var highlightCode = true
+        /// Renders the front matter title/author/date as a header.
+        public var frontMatterHeader = true
 
-    public static func render(markdown: String, imageURL: URLTransform? = nil) -> String {
-        render(MDDocument(markdown: markdown).blocks, imageURL: imageURL)
+        public init(imageURL: ((String) -> String)? = nil, sourceLines: Bool = false, xhtml: Bool = false,
+                    highlightCode: Bool = true, frontMatterHeader: Bool = true) {
+            self.imageURL = imageURL
+            self.sourceLines = sourceLines
+            self.xhtml = xhtml
+            self.highlightCode = highlightCode
+            self.frontMatterHeader = frontMatterHeader
+        }
     }
 
-    public static func render(_ blocks: [MDBlock], imageURL: URLTransform? = nil) -> String {
-        var usedIDs: [String: Int] = [:]
-        let previous = currentImageTransform
-        currentImageTransform = imageURL
-        defer { currentImageTransform = previous }
-        return blocks.map { render($0, tight: false, ids: &usedIDs) }.joined(separator: "\n")
+    private let options: Options
+    private var usedIDs: [String: Int] = [:]
+    private var footnoteNumbers: [String: Int] = [:]
+    private var footnoteOrder: [String] = []
+    private var footnoteDefinitions: [String: MDFootnote] = [:]
+
+    public init(options: Options = Options()) {
+        self.options = options
     }
 
-    // Rendering happens synchronously on one thread at a time per call site (main thread in the app).
-    nonisolated(unsafe) private static var currentImageTransform: URLTransform?
+    // MARK: Convenience API
+
+    public static func render(markdown: String, imageURL: ((String) -> String)? = nil) -> String {
+        render(document: MDDocument(markdown: markdown), options: Options(imageURL: imageURL))
+    }
+
+    public static func render(document: MDDocument, options: Options = Options()) -> String {
+        var renderer = HTMLRenderer(options: options)
+        return renderer.render(document)
+    }
+
+    public static func render(_ blocks: [MDBlock]) -> String {
+        render(document: MDDocument(blocks: blocks))
+    }
 
     /// A complete standalone HTML page.
-    public static func page(body: String, title: String, css: String) -> String {
-        """
+    public static func page(body: String, title: String, css: String, head: String = "", lang: String = "") -> String {
+        let langAttr = lang.isEmpty ? "" : " lang=\"\(escape(lang))\""
+        return """
         <!DOCTYPE html>
-        <html><head><meta charset="utf-8">
+        <html\(langAttr)><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>\(escape(title))</title>
         <style>\(css)</style>
-        </head><body><article class="markdown-body">\(body)</article></body></html>
+        \(head)
+        </head><body><article class="markdown-body" id="content">\(body)</article></body></html>
         """
     }
 
+    // MARK: Document
+
+    public mutating func render(_ doc: MDDocument) -> String {
+        for f in doc.footnotes where footnoteDefinitions[f.id] == nil { footnoteDefinitions[f.id] = f }
+        var parts: [String] = []
+        if options.frontMatterHeader, let header = frontMatterHeader(doc.frontMatter) {
+            parts.append(header)
+        }
+        for (index, block) in doc.blocks.enumerated() {
+            var html = render(block, tight: false)
+            if options.sourceLines, index < doc.blockLines.count {
+                html = Self.addAttribute("data-line=\"\(doc.blockLines[index])\"", to: html)
+            }
+            parts.append(html)
+        }
+        if !footnoteOrder.isEmpty {
+            parts.append(footnotesSection())
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    private func frontMatterHeader(_ fm: [String: String]) -> String? {
+        let title = fm["title"] ?? ""
+        let subtitle = fm["subtitle"] ?? ""
+        let meta = [fm["author"], fm["date"]].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        guard !title.isEmpty || !subtitle.isEmpty || !meta.isEmpty else { return nil }
+        var html = "<header class=\"front-matter\">"
+        if !title.isEmpty { html += "<h1 class=\"doc-title\">\(Self.escape(title))</h1>" }
+        if !subtitle.isEmpty { html += "<p class=\"doc-subtitle\">\(Self.escape(subtitle))</p>" }
+        if !meta.isEmpty { html += "<p class=\"doc-meta\">\(Self.escape(meta))</p>" }
+        return html + "</header>"
+    }
+
+    static func addAttribute(_ attribute: String, to html: String) -> String {
+        guard html.hasPrefix("<"), let end = html.firstIndex(where: { $0 == ">" || $0 == " " }) else { return html }
+        var out = html
+        out.insert(contentsOf: " " + attribute, at: end)
+        return out
+    }
+
+    private var voidClose: String { options.xhtml ? " />" : ">" }
+
     // MARK: Blocks
 
-    static func render(_ block: MDBlock, tight: Bool, ids: inout [String: Int]) -> String {
+    mutating func render(_ block: MDBlock, tight: Bool) -> String {
         switch block {
         case .heading(let level, let content):
-            var id = slug(content.plainText)
-            if let n = ids[id] { ids[id] = n + 1; id += "-\(n)" } else { ids[id] = 1 }
-            return "<h\(level) id=\"\(escape(id))\">\(render(content))</h\(level)>"
+            var id = Self.slug(content.plainText)
+            if let n = usedIDs[id] { usedIDs[id] = n + 1; id += "-\(n)" } else { usedIDs[id] = 1 }
+            return "<h\(level) id=\"\(Self.escape(id))\">\(render(content))</h\(level)>"
 
         case .paragraph(let content):
             return tight ? render(content) : "<p>\(render(content))</p>"
 
         case .codeBlock(let language, let code):
-            let cls = language.isEmpty ? "" : " class=\"language-\(escape(language))\""
-            return "<pre><code\(cls)>\(escape(code))\n</code></pre>"
+            if language.lowercased() == "mermaid" {
+                return "<pre class=\"mermaid\">\(Self.escape(code))</pre>"
+            }
+            let cls = language.isEmpty ? "" : " class=\"language-\(Self.escape(language))\""
+            let body = options.highlightCode && !language.isEmpty
+                ? CodeHighlighter.html(code, language: language) : Self.escape(code)
+            return "<pre><code\(cls)>\(body)\n</code></pre>"
+
+        case .mathBlock(let tex):
+            return "<div class=\"math math-display\">\(Self.escape(tex))</div>"
 
         case .blockquote(let blocks):
-            return "<blockquote>\n" + blocks.map { render($0, tight: false, ids: &ids) }.joined(separator: "\n") + "\n</blockquote>"
+            return "<blockquote>\n" + blocks.map { render($0, tight: false) }.joined(separator: "\n") + "\n</blockquote>"
 
         case .list(let list):
             let isTask = list.items.contains { $0.checked != nil }
@@ -58,19 +138,22 @@ public enum HTMLRenderer {
             if list.ordered && list.start != 1 { open += " start=\"\(list.start)\"" }
             if isTask { open += " class=\"task-list\"" }
             open += ">"
-            let items = list.items.map { item -> String in
-                var inner = item.blocks.map { render($0, tight: list.tight, ids: &ids) }.joined(separator: "\n")
+            var items: [String] = []
+            for item in list.items {
+                var inner = item.blocks.map { render($0, tight: list.tight) }.joined(separator: "\n")
                 var liOpen = "<li>"
                 if let checked = item.checked {
                     liOpen = "<li class=\"task-list-item\">"
-                    let box = "<input type=\"checkbox\" disabled\(checked ? " checked" : "")> "
+                    let box = options.xhtml
+                        ? "<input type=\"checkbox\" disabled=\"disabled\"\(checked ? " checked=\"checked\"" : "") /> "
+                        : "<input type=\"checkbox\" disabled\(checked ? " checked" : "")> "
                     if inner.hasPrefix("<p>") {
                         inner = "<p>" + box + inner.dropFirst(3)
                     } else {
                         inner = box + inner
                     }
                 }
-                return liOpen + inner + "</li>"
+                items.append(liOpen + inner + "</li>")
             }
             return open + "\n" + items.joined(separator: "\n") + "\n</\(tag)>"
 
@@ -103,31 +186,70 @@ public enum HTMLRenderer {
             return html + "</table>"
 
         case .horizontalRule:
-            return "<hr>"
+            return "<hr\(voidClose)"
         }
     }
 
     // MARK: Inlines
 
-    public static func render(_ inlines: [MDInline]) -> String {
-        inlines.map { node -> String in
+    public mutating func render(_ inlines: [MDInline]) -> String {
+        var out = ""
+        for node in inlines {
             switch node {
-            case .text(let s): return escape(s)
-            case .emphasis(let c): return "<em>\(render(c))</em>"
-            case .strong(let c): return "<strong>\(render(c))</strong>"
-            case .strikethrough(let c): return "<del>\(render(c))</del>"
-            case .code(let s): return "<code>\(escape(s))</code>"
+            case .text(let s): out += Self.escape(s)
+            case .emphasis(let c): out += "<em>\(render(c))</em>"
+            case .strong(let c): out += "<strong>\(render(c))</strong>"
+            case .strikethrough(let c): out += "<del>\(render(c))</del>"
+            case .code(let s): out += "<code>\(Self.escape(s))</code>"
             case .link(let text, let url, let title):
-                let t = title.map { " title=\"\(escape($0))\"" } ?? ""
-                return "<a href=\"\(escape(safeURL(url)))\"\(t)>\(render(text))</a>"
+                let t = title.map { " title=\"\(Self.escape($0))\"" } ?? ""
+                out += "<a href=\"\(Self.escape(Self.safeURL(url)))\"\(t)>\(render(text))</a>"
             case .image(let alt, let url, let title):
-                let t = title.map { " title=\"\(escape($0))\"" } ?? ""
-                let src = currentImageTransform?(url) ?? url
-                return "<img src=\"\(escape(safeURL(src)))\" alt=\"\(escape(alt))\"\(t)>"
-            case .lineBreak: return "<br>\n"
-            case .softBreak: return "\n"
+                let t = title.map { " title=\"\(Self.escape($0))\"" } ?? ""
+                let src = options.imageURL?(url) ?? url
+                out += "<img src=\"\(Self.escape(Self.safeURL(src)))\" alt=\"\(Self.escape(alt))\"\(t)\(voidClose)"
+            case .lineBreak: out += "<br\(voidClose)\n"
+            case .softBreak: out += "\n"
+            case .math(let tex):
+                out += "<span class=\"math math-inline\">\(Self.escape(tex))</span>"
+            case .footnoteRef(let id):
+                guard footnoteDefinitions[id] != nil else {
+                    out += Self.escape("[^\(id)]")
+                    continue
+                }
+                let n: Int
+                if let existing = footnoteNumbers[id] {
+                    n = existing
+                } else {
+                    n = footnoteOrder.count + 1
+                    footnoteNumbers[id] = n
+                    footnoteOrder.append(id)
+                }
+                let sid = Self.escape(Self.slug(id))
+                out += "<sup class=\"footnote-ref\"><a href=\"#fn-\(sid)\" id=\"fnref-\(sid)\">\(n)</a></sup>"
             }
-        }.joined()
+        }
+        return out
+    }
+
+    private mutating func footnotesSection() -> String {
+        var html = "<section class=\"footnotes\"><hr\(voidClose)<ol>"
+        var index = 0
+        // Footnotes may reference further footnotes, so iterate until the list is stable
+        while index < footnoteOrder.count {
+            let id = footnoteOrder[index]
+            let sid = Self.escape(Self.slug(id))
+            var body = (footnoteDefinitions[id]?.blocks ?? []).map { render($0, tight: false) }.joined(separator: "\n")
+            let back = "<a href=\"#fnref-\(sid)\" class=\"footnote-back\">↩</a>"
+            if body.hasSuffix("</p>") {
+                body = String(body.dropLast(4)) + " " + back + "</p>"
+            } else {
+                body += back
+            }
+            html += "<li id=\"fn-\(sid)\">\(body)</li>"
+            index += 1
+        }
+        return html + "</ol></section>"
     }
 
     // MARK: Helpers
@@ -158,7 +280,7 @@ public enum HTMLRenderer {
         var out = ""
         for ch in lowered {
             if ch.isLetter || ch.isNumber { out.append(ch) }
-            else if ch == " " || ch == "-" { out.append("-") }
+            else if ch == " " || ch == "-" || ch == "_" { out.append("-") }
         }
         return out.isEmpty ? "section" : out
     }

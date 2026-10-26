@@ -165,7 +165,7 @@ final class SelfTest {
             let pdf = output.appendingPathComponent(base + ".pdf")
             let docx = output.appendingPathComponent(base + ".docx")
             do {
-                try w.writePDF(to: pdf)
+                try await w.writePDF(to: pdf)
                 let rep = NSPDFImageRep(data: try Data(contentsOf: pdf))
                 check(rep != nil && rep!.pageCount >= 1, "PDF export \(base): \(rep?.pageCount ?? 0) oldal")
             } catch { check(false, "PDF export \(base): \(error.localizedDescription)") }

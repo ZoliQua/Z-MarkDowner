@@ -31,6 +31,7 @@ public struct DocxReader {
     private var defaultRun = RunProps(size: 20)
     private var numFormats: [String: [Int: String]] = [:]   // numId -> level -> numFmt
     private var relationships: [String: String] = [:]
+    private var referencedFootnotes: [String] = []
 
     public static func markdown(from data: Data) throws -> String {
         var reader = DocxReader()
@@ -42,7 +43,7 @@ public struct DocxReader {
     private mutating func convert(_ data: Data) throws -> String {
         let zip = try ZipReader(data: data)
         guard let documentData = try zip.contents(of: "word/document.xml") else {
-            throw ZipError.corrupt("word/document.xml hiányzik")
+            throw ZipError.corrupt("word/document.xml")
         }
         if let stylesData = try zip.contents(of: "word/styles.xml") { loadStyles(stylesData) }
         if let numberingData = try zip.contents(of: "word/numbering.xml") { loadNumbering(numberingData) }
@@ -53,6 +54,9 @@ public struct DocxReader {
 
         var paras: [AttributedToMarkdown.Para] = []
         processContainer(body, into: &paras)
+        if let notesData = try zip.contents(of: "word/footnotes.xml") {
+            paras += footnoteDefinitions(notesData)
+        }
         return AttributedToMarkdown.assemble(paras)
     }
 
@@ -109,6 +113,27 @@ public struct DocxReader {
                 relationships[id] = target
             }
         }
+    }
+
+    /// Footnotes that were referenced in the body, as `[^n]: text` definitions.
+    private mutating func footnoteDefinitions(_ data: Data) -> [AttributedToMarkdown.Para] {
+        guard !referencedFootnotes.isEmpty,
+              let doc = try? XMLDocument(data: data, options: [.nodePreserveWhitespace]),
+              let root = doc.rootElement() else { return [] }
+        var result: [AttributedToMarkdown.Para] = []
+        for note in children(root, "footnote") {
+            guard let id = attr(note, "id"), referencedFootnotes.contains(id) else { continue }
+            var texts: [String] = []
+            for p in children(note, "p") {
+                var segs: [AttributedToMarkdown.Segment] = []
+                var maxSize = 0
+                collectRuns(p, base: styleRunProps(nil), link: nil, into: &segs, maxSize: &maxSize)
+                let md = AttributedToMarkdown.inline(from: segs).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !md.isEmpty { texts.append(md) }
+            }
+            result.append(.init(kind: .rawBlock, markdown: "[^\(id)]: " + texts.joined(separator: " "), raw: ""))
+        }
+        return result
     }
 
     // MARK: - Style resolution
@@ -273,6 +298,14 @@ public struct DocxReader {
                     case "br", "cr":
                         if attr(item, "type") != "page" && attr(item, "type") != "column" { text = "\n" }
                     case "noBreakHyphen": text = "-"
+                    case "footnoteReference":
+                        if let id = attr(item, "id") {
+                            if !referencedFootnotes.contains(id) { referencedFootnotes.append(id) }
+                            segments.append(.init(text: "[^\(id)]", bold: false, italic: false, strike: false,
+                                                  code: false, link: nil, raw: true))
+                        }
+                    case "footnoteRef":
+                        break // the number inside the footnote itself
                     case "sym":
                         if let code = attr(item, "char").flatMap({ UInt32($0, radix: 16) }),
                            let scalar = Unicode.Scalar(code >= 0xF000 ? code - 0xF000 : code) {

@@ -1,45 +1,61 @@
 import Foundation
 
+public enum PreviewTheme: String, CaseIterable {
+    case github, academic, minimal
+}
+
 public enum Stylesheets {
 
-    /// Stylesheet for the on-screen preview (follows light/dark appearance).
-    public static let preview = """
+    /// Default on-screen stylesheet.
+    public static var preview: String { css(theme: .github) }
+
+    /// Full stylesheet for a theme. `forExport` removes screen padding/width limits (PDF, EPUB, print);
+    /// `custom` is appended last so it can override anything.
+    public static func css(theme: PreviewTheme, forExport: Bool = false, custom: String = "") -> String {
+        var parts = [base, themeCSS(theme), highlight, extras]
+        if forExport { parts.append(export) }
+        if !custom.isEmpty { parts.append("/* custom */\n" + custom) }
+        return parts.joined(separator: "\n")
+    }
+
+    private static func themeCSS(_ theme: PreviewTheme) -> String {
+        switch theme {
+        case .github: return github
+        case .academic: return academic
+        case .minimal: return minimal
+        }
+    }
+
+    private static let base = """
     :root {
       color-scheme: light dark;
       --fg: #1f2328; --muted: #59636e; --bg: #ffffff; --border: #d1d9e0;
-      --code-bg: #f3f4f6; --quote: #59636e; --link: #0969da; --accent: #0969da;
+      --code-bg: #f3f4f6; --quote: #59636e; --link: #0969da; --accent: #0969da; --mark: #fff8c5;
     }
     @media (prefers-color-scheme: dark) {
       :root {
         --fg: #e6e8eb; --muted: #9198a1; --bg: #1e1f22; --border: #3d444d;
-        --code-bg: #2b2d31; --quote: #9198a1; --link: #4493f8; --accent: #4493f8;
+        --code-bg: #2b2d31; --quote: #9198a1; --link: #4493f8; --accent: #4493f8; --mark: #4d3e00;
       }
     }
     html { background: var(--bg); }
     body {
       margin: 0; padding: 40px 48px 80px; background: var(--bg); color: var(--fg);
-      font: 16px/1.65 -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
       -webkit-font-smoothing: antialiased; word-wrap: break-word;
     }
     .markdown-body { max-width: 820px; margin: 0 auto; }
-    h1, h2, h3, h4, h5, h6 { font-weight: 650; line-height: 1.25; margin: 1.6em 0 0.6em; }
-    h1 { font-size: 2em; padding-bottom: .3em; border-bottom: 1px solid var(--border); }
-    h2 { font-size: 1.5em; padding-bottom: .3em; border-bottom: 1px solid var(--border); }
-    h3 { font-size: 1.25em; } h4 { font-size: 1em; } h5 { font-size: .875em; }
-    h6 { font-size: .85em; color: var(--muted); }
     .markdown-body > :first-child { margin-top: 0; }
-    p, ul, ol, blockquote, pre, table { margin: 0 0 1em; }
     a { color: var(--link); text-decoration: none; }
     a:hover { text-decoration: underline; }
+    p, ul, ol, blockquote, pre, table, .math-display { margin: 0 0 1em; }
     ul, ol { padding-left: 2em; }
     li + li { margin-top: .25em; }
     li > ul, li > ol { margin-bottom: 0; margin-top: .25em; }
     ul.task-list { list-style: none; padding-left: 1.2em; }
     .task-list-item input { margin: 0 .45em 0 -1.2em; vertical-align: middle; }
-    blockquote { margin-left: 0; padding: 0 1em; color: var(--quote); border-left: .25em solid var(--border); }
-    code, pre { font-family: "SF Mono", Menlo, Monaco, monospace; font-size: .875em; }
-    code { background: var(--code-bg); padding: .2em .4em; border-radius: 6px; }
-    pre { background: var(--code-bg); padding: 14px 16px; border-radius: 8px; overflow: auto; line-height: 1.45; }
+    code, pre, .math { font-family: "SF Mono", Menlo, Monaco, monospace; }
+    code { font-size: .875em; background: var(--code-bg); padding: .2em .4em; border-radius: 6px; }
+    pre { font-size: .875em; background: var(--code-bg); padding: 14px 16px; border-radius: 8px; overflow: auto; line-height: 1.45; }
     pre code { background: none; padding: 0; font-size: 1em; }
     table { border-collapse: collapse; display: block; overflow: auto; }
     th, td { border: 1px solid var(--border); padding: 6px 13px; }
@@ -47,29 +63,72 @@ public enum Stylesheets {
     hr { border: 0; height: 2px; background: var(--border); margin: 1.6em 0; }
     img { max-width: 100%; }
     del { color: var(--muted); }
+    blockquote { margin-left: 0; padding: 0 1em; color: var(--quote); border-left: .25em solid var(--border); }
     """
 
-    /// Stylesheet used when converting to PDF (light, print oriented).
-    /// Kept to CSS that the AppKit HTML importer understands.
-    public static let print = """
-    body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 11pt; line-height: 1.45; color: #111111; }
-    h1 { font-size: 22pt; font-weight: bold; margin: 14pt 0 8pt 0; }
-    h2 { font-size: 17pt; font-weight: bold; margin: 14pt 0 6pt 0; }
-    h3 { font-size: 14pt; font-weight: bold; margin: 12pt 0 6pt 0; }
-    h4 { font-size: 12pt; font-weight: bold; margin: 10pt 0 4pt 0; }
-    h5, h6 { font-size: 11pt; font-weight: bold; margin: 10pt 0 4pt 0; }
-    p { margin: 0 0 8pt 0; }
-    ul, ol { margin: 0 0 8pt 0; }
-    li { margin: 0 0 2pt 0; }
-    a { color: #0a58ca; }
-    blockquote { margin: 0 0 8pt 0; padding-left: 12pt; color: #555555; border-left: 3px solid #cccccc; }
-    code { font-family: Menlo, Courier, monospace; font-size: 9.5pt; background-color: #f0f0f0; }
-    pre { font-family: Menlo, Courier, monospace; font-size: 9.5pt; background-color: #f4f4f4; padding: 6pt; margin: 0 0 8pt 0; }
-    pre code { background-color: #f4f4f4; }
-    table { border-collapse: collapse; margin: 0 0 8pt 0; }
-    th, td { border: 1px solid #999999; padding: 3pt 6pt; }
-    th { background-color: #eeeeee; font-weight: bold; }
-    hr { border: 0; border-top: 1px solid #aaaaaa; }
-    del { color: #666666; }
+    private static let github = """
+    body { font: 16px/1.65 -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif; }
+    h1, h2, h3, h4, h5, h6 { font-weight: 650; line-height: 1.25; margin: 1.6em 0 0.6em; }
+    h1 { font-size: 2em; padding-bottom: .3em; border-bottom: 1px solid var(--border); }
+    h2 { font-size: 1.5em; padding-bottom: .3em; border-bottom: 1px solid var(--border); }
+    h3 { font-size: 1.25em; } h4 { font-size: 1em; } h5 { font-size: .875em; }
+    h6 { font-size: .85em; color: var(--muted); }
+    """
+
+    private static let academic = """
+    body { font: 17px/1.6 "Iowan Old Style", "Palatino", "Georgia", "Times New Roman", serif; }
+    .markdown-body { max-width: 720px; text-align: justify; hyphens: auto; -webkit-hyphens: auto; }
+    h1, h2, h3, h4, h5, h6 { font-weight: 600; line-height: 1.25; margin: 1.5em 0 0.5em; text-align: left; }
+    h1 { font-size: 1.9em; text-align: center; font-variant: small-caps; letter-spacing: .02em; }
+    h2 { font-size: 1.4em; } h3 { font-size: 1.2em; font-style: italic; } h4, h5, h6 { font-size: 1em; }
+    p + p { text-indent: 1.5em; margin-top: -0.6em; }
+    blockquote { border-left: none; font-style: italic; padding: 0 2em; }
+    th { background: none; border-bottom: 2px solid var(--fg); }
+    th, td { border-left: none; border-right: none; }
+    .front-matter { text-align: center; }
+    """
+
+    private static let minimal = """
+    body { font: 17px/1.75 -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif; }
+    .markdown-body { max-width: 680px; }
+    h1, h2, h3, h4, h5, h6 { font-weight: 600; line-height: 1.3; margin: 2em 0 0.7em; letter-spacing: -0.01em; }
+    h1 { font-size: 2.1em; font-weight: 700; } h2 { font-size: 1.45em; } h3 { font-size: 1.2em; }
+    h4, h5, h6 { font-size: 1em; color: var(--muted); }
+    pre, code, th { background: transparent; }
+    pre { border: 1px solid var(--border); }
+    blockquote { border-left-width: 2px; }
+    hr { height: 1px; width: 30%; margin: 2.5em auto; }
+    """
+
+    private static let highlight = """
+    .hl-kw { color: #cf222e; } .hl-str { color: #0a3069; } .hl-com { color: #6e7781; font-style: italic; }
+    .hl-num { color: #0550ae; } .hl-type { color: #953800; } .hl-fn { color: #8250df; } .hl-attr { color: #116329; }
+    @media (prefers-color-scheme: dark) {
+      .hl-kw { color: #ff7b72; } .hl-str { color: #a5d6ff; } .hl-com { color: #8b949e; }
+      .hl-num { color: #79c0ff; } .hl-type { color: #ffa657; } .hl-fn { color: #d2a8ff; } .hl-attr { color: #7ee787; }
+    }
+    """
+
+    private static let extras = """
+    .front-matter { margin-bottom: 2em; padding-bottom: 1em; border-bottom: 1px solid var(--border); }
+    .front-matter .doc-title { border: none; margin: 0 0 .2em; padding: 0; font-size: 2.2em; }
+    .front-matter .doc-subtitle { font-size: 1.25em; color: var(--muted); margin: 0 0 .4em; }
+    .front-matter .doc-meta { color: var(--muted); margin: 0; font-size: .95em; }
+    .footnotes { font-size: .9em; color: var(--muted); margin-top: 2.5em; }
+    .footnotes hr { height: 1px; width: 35%; margin: 0 0 1em; }
+    .footnote-ref a { text-decoration: none; padding: 0 .1em; }
+    .footnote-back { text-decoration: none; margin-left: .3em; }
+    .math-inline { font-size: .95em; }
+    .math-display { text-align: center; overflow-x: auto; overflow-y: hidden; padding: .3em 0; }
+    pre.mermaid { background: transparent; text-align: center; font-family: inherit; }
+    .math:not(.katex-rendered) { color: var(--muted); }
+    """
+
+    private static let export = """
+    body { padding: 0; background: #fff; }
+    .markdown-body { max-width: none; }
+    pre { white-space: pre-wrap; word-wrap: break-word; overflow: visible; }
+    table { display: table; }
+    .math-display { overflow: visible; }
     """
 }

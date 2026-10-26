@@ -163,16 +163,6 @@ final class ExportImportTests: XCTestCase {
         XCTAssertTrue(md.contains("| Oszlop A | Oszlop B |"), md)
     }
 
-    @MainActor
-    func testPDFExport() throws {
-        let long = Array(repeating: Self.sample, count: 6).joined(separator: "\n\n")
-        let data = try PDFExporter.pdfData(markdown: long, title: "Teszt", baseURL: nil)
-        XCTAssertTrue(data.starts(with: Array("%PDF".utf8)))
-        let pdf = try XCTUnwrap(NSPDFImageRep(data: data))
-        XCTAssertGreaterThan(pdf.pageCount, 1, "long document should paginate")
-        XCTAssertEqual(pdf.bounds.width, PDFExporter.pageSize.width, accuracy: 1)
-    }
-
     func testRTFImport() throws {
         let attr = NSMutableAttributedString(string: "Nagy cím\n", attributes: [.font: NSFont.boldSystemFont(ofSize: 24)])
         attr.append(NSAttributedString(string: "Normál ", attributes: [.font: NSFont.systemFont(ofSize: 12)]))
@@ -194,5 +184,85 @@ final class ExportImportTests: XCTestCase {
         XCTAssertEqual(DocumentImporter.decodeText(cp1250), "Árvíztűrő tükörfúrógép")
         let utf8bom = Data([0xEF, 0xBB, 0xBF]) + Data("őű".utf8)
         XCTAssertEqual(DocumentImporter.decodeText(utf8bom), "őű")
+    }
+}
+
+
+final class ExtendedSyntaxTests: XCTestCase {
+
+    func testFrontMatterFootnotesMathAndLines() {
+        let md = """
+        ---
+        title: "Jelentés"
+        author: Dr. Teszt
+        keywords: [a, b]
+        ---
+        # Bevezetés
+
+        Szöveg lábjegyzettel[^n] és képlettel $a^2+b^2$ és $5 meg $10.
+
+        $$
+        x = 1
+        $$
+
+        [^n]: A lábjegyzet.
+        """
+        let doc = MDDocument(markdown: md)
+        XCTAssertEqual(doc.frontMatter["title"], "Jelentés")
+        XCTAssertEqual(doc.frontMatter["keywords"], "a, b")
+        XCTAssertEqual(doc.blocks.count, 3)
+        XCTAssertEqual(doc.blockLines, [5, 7, 9])
+        XCTAssertEqual(doc.footnotes.first?.id, "n")
+        XCTAssertEqual(doc.blocks[2], .mathBlock("x = 1"))
+        guard case .paragraph(let inl) = doc.blocks[1] else { return XCTFail() }
+        XCTAssertTrue(inl.contains(.footnoteRef("n")))
+        XCTAssertTrue(inl.contains(.math("a^2+b^2")))
+        XCTAssertFalse(inl.contains { if case .math(let t) = $0 { return t.contains("5") } else { return false } }, "currency is not math")
+
+        let html = HTMLRenderer.render(document: doc, options: .init(sourceLines: true))
+        XCTAssertTrue(html.contains("<h1 class=\"doc-title\">Jelentés</h1>"))
+        XCTAssertTrue(html.contains("data-line=\"5\""))
+        XCTAssertTrue(html.contains("class=\"footnotes\""))
+        XCTAssertTrue(html.contains("href=\"#fn-n\""))
+        XCTAssertEqual(doc.outline.first?.text, "Bevezetés")
+    }
+
+    func testCodeHighlighting() {
+        let html = CodeHighlighter.html("let x = \"hi\" // note", language: "swift")
+        XCTAssertTrue(html.contains("<span class=\"hl-kw\">let</span>"))
+        XCTAssertTrue(html.contains("<span class=\"hl-str\">&quot;hi&quot;</span>"))
+        XCTAssertTrue(html.contains("<span class=\"hl-com\">// note</span>"))
+        XCTAssertEqual(CodeHighlighter.html("<b>", language: "unknown-lang"), "&lt;b&gt;")
+    }
+
+    private func unzip(_ data: Data, _ part: String) throws -> Data? {
+        try ZipReader(data: data).contents(of: part)
+    }
+
+    func testEPUBStructure() throws {
+        let data = EPUBWriter.makeEPUB(markdown: ExportImportTests.sample + "\n\n## Második\n\nSzöveg.", options: ExportOptions(title: "Könyv"))
+        let zip = try ZipReader(data: data)
+        XCTAssertEqual(try zip.contents(of: "mimetype"), Data("application/epub+zip".utf8))
+        for part in ["META-INF/container.xml", "OEBPS/content.opf", "OEBPS/nav.xhtml", "OEBPS/content.xhtml"] {
+            let xml = try XCTUnwrap(try zip.contents(of: part), part)
+            XCTAssertNoThrow(try XMLDocument(data: xml), "\(part) is not well-formed")
+        }
+        let nav = String(decoding: try XCTUnwrap(try zip.contents(of: "OEBPS/nav.xhtml")), as: UTF8.self)
+        XCTAssertTrue(nav.contains("#lista"))
+        XCTAssertTrue(nav.contains("Második"))
+    }
+
+    func testDocxFootnotesAndFrontMatterRoundTrip() throws {
+        let md = "---\ntitle: Cím\nauthor: Szerző\n---\n\nSzöveg[^1] vége.\n\n[^1]: Megjegyzés **fontos**.\n"
+        var writer = DocxWriter(title: "T")
+        let data = writer.makeDocx(markdown: md)
+        let zip = try ZipReader(data: data)
+        for part in ["word/document.xml", "word/footnotes.xml", "word/styles.xml", "word/settings.xml"] {
+            XCTAssertNoThrow(try XMLDocument(data: try XCTUnwrap(try zip.contents(of: part))), part)
+        }
+        let back = try DocxReader.markdown(from: data)
+        XCTAssertTrue(back.contains("Szöveg[^1] vége."), back)
+        XCTAssertTrue(back.contains("[^1]: Megjegyzés **fontos**."), back)
+        XCTAssertTrue(back.contains("# Cím"), back)
     }
 }

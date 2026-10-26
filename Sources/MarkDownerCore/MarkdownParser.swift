@@ -6,25 +6,142 @@ public enum MarkdownParser {
     // MARK: - Public API
 
     public static func parseBlocks(_ text: String) -> [MDBlock] {
+        parseDocument(text).blocks
+    }
+
+    /// Parses a complete document: front matter, blocks (with source lines) and footnotes.
+    public static func parseDocument(_ text: String) -> MDDocument {
         let normalized = text
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
-        let lines = normalized.components(separatedBy: "\n").map(expandLeadingTabs)
-        return parseBlocks(lines: lines)
+        var lines = normalized.components(separatedBy: "\n").map(expandLeadingTabs)
+        let (frontMatter, bodyStart) = parseFrontMatter(lines)
+        lines = Array(lines[bodyStart...])
+        let ctx = ParseContext(lineOffset: bodyStart)
+        let blocks = parseBlocks(lines: lines, ctx: ctx)
+        return MDDocument(blocks: blocks, blockLines: ctx.starts, footnotes: ctx.footnotes, frontMatter: frontMatter)
+    }
+
+    /// State collected while parsing the top level of a document.
+    final class ParseContext {
+        let lineOffset: Int
+        var starts: [Int] = []
+        var footnotes: [MDFootnote] = []
+        init(lineOffset: Int) { self.lineOffset = lineOffset }
+    }
+
+    /// Extracts a leading YAML front matter block (`---` … `---`), returning its keys and the first body line.
+    static func parseFrontMatter(_ lines: [String]) -> ([String: String], Int) {
+        guard let first = lines.first, first.trimmingCharacters(in: .whitespaces) == "---", lines.count > 2 else {
+            return ([:], 0)
+        }
+        var end: Int?
+        for k in 1..<min(lines.count, 300) {
+            let t = lines[k].trimmingCharacters(in: .whitespaces)
+            if t == "---" || t == "..." { end = k; break }
+        }
+        guard let end, end > 1 else { return ([:], 0) }
+        var result: [String: String] = [:]
+        var sawKey = false
+        var lastKey: String?
+        for line in lines[1..<end] {
+            if line.trimmingCharacters(in: .whitespaces).isEmpty || line.hasPrefix("#") { continue }
+            if let colon = line.firstIndex(of: ":"), !line.hasPrefix(" "), !line.hasPrefix("-") {
+                let key = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+                guard key.range(of: #"^[A-Za-z0-9_\-]+$"#, options: .regularExpression) != nil else { return ([:], 0) }
+                var value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+                if value.count >= 2, let f = value.first, let l = value.last, (f == "\"" && l == "\"") || (f == "'" && l == "'") {
+                    value = String(value.dropFirst().dropLast())
+                }
+                if value.hasPrefix("[") && value.hasSuffix("]") {
+                    value = value.dropFirst().dropLast().split(separator: ",")
+                        .map { $0.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "\"'")) }
+                        .joined(separator: ", ")
+                }
+                result[key] = value
+                lastKey = key
+                sawKey = true
+            } else if let key = lastKey {
+                // YAML list items ("- a") or folded continuation lines
+                var item = line.trimmingCharacters(in: .whitespaces)
+                if item.hasPrefix("- ") { item.removeFirst(2) }
+                let existing = result[key] ?? ""
+                result[key] = existing.isEmpty ? item : existing + ", " + item
+            } else {
+                return ([:], 0)
+            }
+        }
+        return sawKey ? (result, end + 1) : ([:], 0)
     }
 
     // MARK: - Block parsing
 
-    static func parseBlocks(lines: [String]) -> [MDBlock] {
+    static func parseBlocks(lines: [String], ctx: ParseContext? = nil) -> [MDBlock] {
         var blocks: [MDBlock] = []
         var i = 0
+        var pendingStart = 0
 
         while i < lines.count {
+            if let ctx {
+                while ctx.starts.count < blocks.count { ctx.starts.append(pendingStart) }
+            }
             let line = lines[i]
             if isBlank(line) { i += 1; continue }
+            pendingStart = i + (ctx?.lineOffset ?? 0)
 
             let indent = leadingSpaces(line)
             let trimmed = String(line.dropFirst(indent))
+
+            // Footnote definition (top level only)
+            if let ctx, indent < 4, let def = footnoteDefinition(trimmed) {
+                var body: [String] = [def.text]
+                i += 1
+                while i < lines.count {
+                    let l = lines[i]
+                    if isBlank(l) {
+                        if i + 1 < lines.count, leadingSpaces(lines[i + 1]) >= 4 { body.append(""); i += 1; continue }
+                        break
+                    }
+                    if leadingSpaces(l) >= 4 { body.append(String(l.dropFirst(4))); i += 1; continue }
+                    if let last = body.last, !isBlank(last), !startsBlock(l), footnoteDefinition(l) == nil {
+                        body.append(l); i += 1; continue
+                    }
+                    break
+                }
+                ctx.footnotes.append(MDFootnote(id: def.id, blocks: parseBlocks(lines: body)))
+                continue
+            }
+
+            // Display math
+            if indent < 4, trimmed.hasPrefix("$$") {
+                let rest = trimmed.dropFirst(2)
+                if rest.trimmingCharacters(in: .whitespaces).hasSuffix("$$"), rest.trimmingCharacters(in: .whitespaces).count > 2 {
+                    let tex = rest.trimmingCharacters(in: .whitespaces).dropLast(2)
+                    blocks.append(.mathBlock(tex.trimmingCharacters(in: .whitespaces)))
+                    i += 1
+                    continue
+                }
+                var tex: [String] = []
+                if !rest.trimmingCharacters(in: .whitespaces).isEmpty { tex.append(String(rest)) }
+                var j = i + 1
+                var closed = false
+                while j < lines.count {
+                    let t = lines[j].trimmingCharacters(in: .whitespaces)
+                    if t.hasSuffix("$$") {
+                        let before = t.dropLast(2)
+                        if !before.isEmpty { tex.append(String(before)) }
+                        closed = true
+                        break
+                    }
+                    tex.append(lines[j])
+                    j += 1
+                }
+                if closed {
+                    blocks.append(.mathBlock(tex.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)))
+                    i = j + 1
+                    continue
+                }
+            }
 
             // Fenced code block
             if indent < 4, let fence = fenceStart(trimmed) {
@@ -36,7 +153,11 @@ public enum MarkdownParser {
                     code.append(removeIndent(l, upTo: indent))
                     i += 1
                 }
-                blocks.append(.codeBlock(language: fence.info, code: code.joined(separator: "\n")))
+                if fence.info.lowercased() == "math" || fence.info.lowercased() == "latex" {
+                    blocks.append(.mathBlock(code.joined(separator: "\n")))
+                } else {
+                    blocks.append(.codeBlock(language: fence.info, code: code.joined(separator: "\n")))
+                }
                 continue
             }
 
@@ -144,6 +265,9 @@ public enum MarkdownParser {
             } else {
                 blocks.append(.paragraph(parseInlines(trimTrailingWhitespace(text))))
             }
+        }
+        if let ctx {
+            while ctx.starts.count < blocks.count { ctx.starts.append(pendingStart) }
         }
         return blocks
     }
@@ -308,10 +432,19 @@ public enum MarkdownParser {
         if fenceStart(t) != nil { return true }
         if isHorizontalRule(t) { return true }
         if t.hasPrefix(">") { return true }
+        if t.hasPrefix("$$") { return true }
         if let m = listMarker(line), !m.content.trimmingCharacters(in: .whitespaces).isEmpty {
             if !m.ordered || m.number == 1 { return true }
         }
         return false
+    }
+
+    static func footnoteDefinition(_ t: String) -> (id: String, text: String)? {
+        guard t.hasPrefix("[^"), let close = t.firstIndex(of: "]") else { return nil }
+        let id = String(t[t.index(t.startIndex, offsetBy: 2)..<close])
+        let after = t[t.index(after: close)...]
+        guard !id.isEmpty, !id.contains(" "), after.hasPrefix(":") else { return nil }
+        return (id, after.dropFirst().trimmingCharacters(in: .whitespaces))
     }
 
     static func atxHeading(_ t: String) -> (level: Int, text: String)? {
@@ -363,7 +496,7 @@ public enum MarkdownParser {
 
     // MARK: Tables
 
-    static func splitTableRow(_ line: String) -> [String] {
+    public static func splitTableRow(_ line: String) -> [String] {
         var t = line.trimmingCharacters(in: .whitespaces)
         if t.hasPrefix("|") { t.removeFirst() }
         if t.hasSuffix("|") && !t.hasSuffix("\\|") { t.removeLast() }
@@ -392,7 +525,7 @@ public enum MarkdownParser {
         return cells
     }
 
-    static func isTableDelimiterRow(_ line: String) -> Bool {
+    public static func isTableDelimiterRow(_ line: String) -> Bool {
         let t = line.trimmingCharacters(in: .whitespaces)
         guard t.contains("-"), t.allSatisfy({ "|:- \t".contains($0) }) else { return false }
         let cells = splitTableRow(t)
@@ -402,7 +535,7 @@ public enum MarkdownParser {
         }
     }
 
-    static func parseAlignment(_ cell: String) -> MDAlignment {
+    public static func parseAlignment(_ cell: String) -> MDAlignment {
         let left = cell.hasPrefix(":")
         let right = cell.hasSuffix(":")
         switch (left, right) {
@@ -517,7 +650,9 @@ struct InlineParser {
                 }
 
             case "[":
-                if let (text, url, title, end) = linkAt(i) {
+                if i + 1 < c.count, c[i + 1] == "^", let (id, end) = footnoteRef(at: i) {
+                    flush(); result.append(.footnoteRef(id)); i = end
+                } else if let (text, url, title, end) = linkAt(i) {
                     flush()
                     result.append(.link(text: MarkdownParser.parseInlines(text), url: url, title: title))
                     i = end
@@ -542,6 +677,13 @@ struct InlineParser {
                 } else {
                     let run = runLength(at: i, of: ch)
                     buffer += String(repeating: ch, count: run); i += run
+                }
+
+            case "$":
+                if let (tex, end) = inlineMath(at: i) {
+                    flush(); result.append(.math(tex)); i = end
+                } else {
+                    buffer.append(ch); i += 1
                 }
 
             case "h", "w":
@@ -611,6 +753,45 @@ struct InlineParser {
         if c[k] == "`" {
             if let (_, end) = codeSpan(at: k) { return end }
             return k + runLength(at: k, of: "`")
+        }
+        return nil
+    }
+
+    // MARK: Footnotes and math
+
+    func footnoteRef(at pos: Int) -> (String, Int)? {
+        var k = pos + 2
+        var id = ""
+        while k < c.count, c[k] != "]" {
+            if c[k].isWhitespace || c[k] == "[" { return nil }
+            id.append(c[k]); k += 1
+        }
+        guard k < c.count, !id.isEmpty else { return nil }
+        // "[^x](url)" is a link, not a footnote
+        if k + 1 < c.count, c[k + 1] == "(" { return nil }
+        return (id, k + 1)
+    }
+
+    func inlineMath(at pos: Int) -> (String, Int)? {
+        let double = pos + 1 < c.count && c[pos + 1] == "$"
+        let open = double ? 2 : 1
+        let start = pos + open
+        guard start < c.count, !c[start].isWhitespace else { return nil }
+        var k = start
+        while k < c.count {
+            if c[k] == "\\" { k += 2; continue }
+            if c[k] == "$" {
+                if double {
+                    if k + 1 < c.count, c[k + 1] == "$", k > start { return (String(c[start..<k]), k + 2) }
+                } else {
+                    // Closing $ must follow non-space and must not be followed by a digit (currency)
+                    if k > start, !c[k - 1].isWhitespace, !(k + 1 < c.count && c[k + 1].isNumber) {
+                        return (String(c[start..<k]), k + 1)
+                    }
+                }
+            }
+            if c[k] == "\n" && k + 1 < c.count && c[k + 1] == "\n" { return nil }
+            k += 1
         }
         return nil
     }

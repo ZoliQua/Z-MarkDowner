@@ -7,9 +7,9 @@ public enum ImportError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .unsupportedFormat(let ext):
-            return "A(z) „.\(ext)” formátum nem támogatott."
+            return CoreStrings.unsupportedFormat(ext)
         case .unreadable(let name, let underlying):
-            var msg = "A(z) „\(name)” fájl nem olvasható."
+            var msg = CoreStrings.unreadable(name)
             if let underlying { msg += " (\(underlying.localizedDescription))" }
             return msg
         }
@@ -272,6 +272,8 @@ public enum AttributedToMarkdown {
         var strike: Bool
         var code: Bool
         var link: String?
+        /// Already Markdown (e.g. a footnote marker); not escaped.
+        var raw = false
     }
 
     static func inlineMarkdown(_ attr: NSAttributedString, range: NSRange, suppressBold: Bool = false) -> String {
@@ -379,7 +381,7 @@ public enum AttributedToMarkdown {
                 continue
             }
             closeAll(downTo: common)
-            var text = escape(seg.text)
+            var text = seg.raw ? seg.text : escape(seg.text)
             let lead = String(text.prefix(while: { $0 == " " || $0 == "\t" }))
             text.removeFirst(lead.count)
             out += lead

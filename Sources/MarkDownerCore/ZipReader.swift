@@ -8,9 +8,9 @@ public enum ZipError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .notAZip: return "A fájl nem érvényes ZIP/DOCX csomag."
-        case .corrupt(let what): return "Sérült ZIP csomag (\(what))."
-        case .unsupportedMethod(let m): return "Nem támogatott tömörítési mód: \(m)."
+        case .notAZip: return CoreStrings.notAZip
+        case .corrupt(let what): return CoreStrings.corruptZip(what)
+        case .unsupportedMethod(let m): return CoreStrings.unsupportedZipMethod(Int(m))
         }
     }
 }

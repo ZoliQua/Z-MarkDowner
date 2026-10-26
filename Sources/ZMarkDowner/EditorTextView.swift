@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 import MarkDownerCore
 
 /// Markdown source editor with formatting commands.
@@ -7,14 +8,28 @@ final class EditorTextView: NSTextView {
     /// Maximum width of a line of text; extra space becomes side margins (nice in full screen).
     var readableWidth: CGFloat = 860 { didSet { updateInsets() } }
 
+    var typewriterMode = false {
+        didSet { updateInsets(); if typewriterMode { centerCaret() } }
+    }
+
+    var focusMode = false {
+        didSet { updateFocusDimming() }
+    }
+
+    var markdownDocument: MarkdownDocument? {
+        window?.windowController?.document as? MarkdownDocument
+    }
+
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         updateInsets()
     }
 
-    private func updateInsets() {
+    func updateInsets() {
         let horizontal = max(24, (bounds.width - readableWidth) / 2)
-        let inset = NSSize(width: horizontal, height: 24)
+        let visibleHeight = enclosingScrollView?.contentView.bounds.height ?? 600
+        let vertical: CGFloat = typewriterMode ? max(24, visibleHeight / 2 - 20) : 24
+        let inset = NSSize(width: horizontal, height: vertical)
         if textContainerInset != inset { textContainerInset = inset }
     }
 
@@ -33,7 +48,7 @@ final class EditorTextView: NSTextView {
         scrollRangeToVisible(selectedRange())
     }
 
-    private var nsString: NSString { string as NSString }
+    var nsString: NSString { string as NSString }
 
     // MARK: - Inline formatting
 
@@ -43,7 +58,6 @@ final class EditorTextView: NSTextView {
         let m = (marker as NSString).length
         let text = nsString
 
-        // Already wrapped: markers just outside the selection
         if sel.location >= m, NSMaxRange(sel) + m <= text.length,
            text.substring(with: NSRange(location: sel.location - m, length: m)) == marker,
            text.substring(with: NSRange(location: NSMaxRange(sel), length: m)) == marker {
@@ -51,7 +65,6 @@ final class EditorTextView: NSTextView {
             replace(outer, with: text.substring(with: sel), select: NSRange(location: 0, length: sel.length))
             return
         }
-        // Selection includes the markers
         if sel.length >= 2 * m {
             let selected = text.substring(with: sel)
             if selected.hasPrefix(marker), selected.hasSuffix(marker) {
@@ -60,69 +73,71 @@ final class EditorTextView: NSTextView {
                 return
             }
         }
-
         if sel.length == 0 {
             replace(sel, with: marker + placeholder + marker,
                     select: NSRange(location: m, length: (placeholder as NSString).length))
             return
         }
-        // Keep surrounding whitespace outside the markers
         let selected = text.substring(with: sel)
         let lead = String(selected.prefix(while: { $0 == " " }))
         let trail = String(selected.reversed().prefix(while: { $0 == " " }))
         let core = selected.trimmingCharacters(in: .whitespaces)
-        let replacement = lead + marker + core + marker + trail
-        replace(sel, with: replacement,
+        replace(sel, with: lead + marker + core + marker + trail,
                 select: NSRange(location: (lead as NSString).length + m, length: (core as NSString).length))
     }
 
-    @objc func formatBold(_ sender: Any?) { toggleInline("**", placeholder: "félkövér szöveg") }
-    @objc func formatItalic(_ sender: Any?) { toggleInline("*", placeholder: "dőlt szöveg") }
-    @objc func formatStrikethrough(_ sender: Any?) { toggleInline("~~", placeholder: "áthúzott szöveg") }
-    @objc func formatInlineCode(_ sender: Any?) { toggleInline("`", placeholder: "kód") }
+    @objc func formatBold(_ sender: Any?) { toggleInline("**", placeholder: L("placeholder.bold", "bold text")) }
+    @objc func formatItalic(_ sender: Any?) { toggleInline("*", placeholder: L("placeholder.italic", "italic text")) }
+    @objc func formatStrikethrough(_ sender: Any?) { toggleInline("~~", placeholder: L("placeholder.strike", "struck text")) }
+    @objc func formatInlineCode(_ sender: Any?) { toggleInline("`", placeholder: L("placeholder.code", "code")) }
+    @objc func insertInlineMath(_ sender: Any?) { toggleInline("$", placeholder: "E = mc^2") }
 
     @objc func insertLink(_ sender: Any?) {
         let sel = selectedRange()
         let selected = nsString.substring(with: sel)
+        let label = L("placeholder.linkText", "link text")
         if selected.hasPrefix("http://") || selected.hasPrefix("https://") {
-            replace(sel, with: "[link szövege](\(selected))", select: NSRange(location: 1, length: 12))
+            replace(sel, with: "[\(label)](\(selected))", select: NSRange(location: 1, length: (label as NSString).length))
         } else {
-            let label = selected.isEmpty ? "link szövege" : selected
-            let s = "[\(label)](https://)"
-            let urlStart = (label as NSString).length + 3
-            replace(sel, with: s, select: NSRange(location: urlStart, length: 8))
+            let text = selected.isEmpty ? label : selected
+            replace(sel, with: "[\(text)](https://)", select: NSRange(location: (text as NSString).length + 3, length: 8))
         }
     }
 
     @objc func insertImage(_ sender: Any?) {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
-        panel.message = "Válassz képet a beszúráshoz"
+        panel.allowsMultipleSelection = true
+        panel.message = L("panel.chooseImage", "Choose images to insert")
         guard let window else { return }
         panel.beginSheetModal(for: window) { [weak self] response in
-            guard let self else { return }
-            let sel = self.selectedRange()
-            if response == .OK, let url = panel.url {
-                var path = url.path
-                if let base = (self.window?.windowController?.document as? MarkdownDocument)?.fileURL?.deletingLastPathComponent(),
-                   url.path.hasPrefix(base.path + "/") {
-                    path = String(url.path.dropFirst(base.path.count + 1))
-                }
-                let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
-                let alt = url.deletingPathExtension().lastPathComponent
-                self.replace(sel, with: "![\(alt)](\(encoded))")
-            }
+            guard let self, response == .OK else { return }
+            self.insertImageFiles(panel.urls, at: self.selectedRange())
         }
+    }
+
+    @objc func insertFootnote(_ sender: Any?) {
+        var n = 1
+        while nsString.range(of: "[^\(n)]").location != NSNotFound { n += 1 }
+        let sel = selectedRange()
+        let placeholder = L("placeholder.footnote", "Footnote text")
+        undoManager?.beginUndoGrouping()
+        replace(NSRange(location: NSMaxRange(sel), length: 0), with: "[^\(n)]")
+        let end = nsString.length
+        let separator = string.hasSuffix("\n\n") ? "" : (string.hasSuffix("\n") ? "\n" : "\n\n")
+        let definition = separator + "[^\(n)]: "
+        replace(NSRange(location: end, length: 0), with: definition + placeholder,
+                select: NSRange(location: (definition as NSString).length, length: (placeholder as NSString).length))
+        undoManager?.endUndoGrouping()
     }
 
     // MARK: - Line (block) formatting
 
-    /// Ranges of the full lines touched by the selection.
-    private var selectedLinesRange: NSRange {
+    var selectedLinesRange: NSRange {
         nsString.lineRange(for: selectedRange())
     }
 
-    private func transformSelectedLines(_ transform: ([String]) -> [String]) {
+    func transformSelectedLines(_ transform: ([String]) -> [String]) {
         let range = selectedLinesRange
         var block = nsString.substring(with: range)
         let hadNewline = block.hasSuffix("\n")
@@ -133,7 +148,6 @@ final class EditorTextView: NSTextView {
         let length = (result as NSString).length - (hadNewline ? 1 : 0)
         replace(range, with: result, select: NSRange(location: 0, length: max(0, length)))
         if lines.count == 1 {
-            // Single line: put the caret at the end of the line instead of selecting it
             setSelectedRange(NSRange(location: range.location + max(0, length), length: 0))
         }
     }
@@ -141,7 +155,7 @@ final class EditorTextView: NSTextView {
     private static let blockPrefix = try! NSRegularExpression(
         pattern: #"^(\s*)(#{1,6}\s+|>\s?|[-*+]\s+\[[ xX]\]\s+|[-*+]\s+|\d+[.)]\s+)?"#)
 
-    private func split(_ line: String) -> (indent: String, prefix: String, body: String) {
+    func split(_ line: String) -> (indent: String, prefix: String, body: String) {
         let ns = line as NSString
         guard let m = Self.blockPrefix.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else {
             return ("", "", line)
@@ -211,7 +225,7 @@ final class EditorTextView: NSTextView {
     // MARK: - Block insertion
 
     /// Inserts a block on its own lines (adds blank lines around it when needed).
-    private func insertBlock(_ block: String, selectInside: NSRange? = nil) {
+    func insertBlock(_ block: String, selectInside: NSRange? = nil) {
         let sel = selectedRange()
         let text = nsString
         var before = ""
@@ -234,18 +248,27 @@ final class EditorTextView: NSTextView {
 
     @objc func insertCodeBlock(_ sender: Any?) {
         let selected = nsString.substring(with: selectedRange())
-        let code = selected.isEmpty ? "kód" : selected
+        let code = selected.isEmpty ? L("placeholder.code", "code") : selected
         insertBlock("```\n\(code)\n```", selectInside: NSRange(location: 4, length: (code as NSString).length))
     }
 
+    @objc func insertMathBlock(_ sender: Any?) {
+        let selected = nsString.substring(with: selectedRange())
+        let tex = selected.isEmpty ? #"\int_0^1 x^2\,dx = \frac{1}{3}"# : selected
+        insertBlock("$$\n\(tex)\n$$", selectInside: NSRange(location: 3, length: (tex as NSString).length))
+    }
+
+    @objc func insertDiagram(_ sender: Any?) {
+        let diagram = "graph TD\n    A[\(L("placeholder.start", "Start"))] --> B{?}\n    B -->|✓| C[OK]\n    B -->|✗| D[…]"
+        insertBlock("```mermaid\n\(diagram)\n```", selectInside: NSRange(location: 11, length: (diagram as NSString).length))
+    }
+
     @objc func insertTable(_ sender: Any?) {
-        let table = """
-        | Oszlop 1 | Oszlop 2 | Oszlop 3 |
-        |----------|----------|----------|
-        | Cella    | Cella    | Cella    |
-        | Cella    | Cella    | Cella    |
-        """
-        insertBlock(table, selectInside: NSRange(location: 2, length: 8))
+        let c = L("placeholder.column", "Column")
+        let cell = L("placeholder.cell", "Cell")
+        let table = TableModel(rows: [["\(c) 1", "\(c) 2", "\(c) 3"], [cell, cell, cell], [cell, cell, cell]],
+                               alignments: [.none, .none, .none]).markdown()
+        insertBlock(table, selectInside: NSRange(location: 2, length: ("\(c) 1" as NSString).length))
     }
 
     @objc func insertHorizontalRule(_ sender: Any?) {
@@ -254,10 +277,11 @@ final class EditorTextView: NSTextView {
 
     // MARK: - Smart editing
 
-    /// Continues lists and quotes when pressing Return.
+    /// Continues lists and quotes when pressing Return; adds a table row at the end of a table row.
     override func insertNewline(_ sender: Any?) {
         let sel = selectedRange()
         guard sel.length == 0 else { return super.insertNewline(sender) }
+        if handleTableNewline() { return }
         let lineRange = nsString.lineRange(for: NSRange(location: sel.location, length: 0))
         let lineToCaret = nsString.substring(with: NSRange(location: lineRange.location, length: sel.location - lineRange.location))
         let (indent, prefix, body) = split(lineToCaret)
@@ -265,7 +289,6 @@ final class EditorTextView: NSTextView {
         guard !prefix.isEmpty, !prefix.hasPrefix("#") else { return super.insertNewline(sender) }
 
         if body.trimmingCharacters(in: .whitespaces).isEmpty {
-            // Empty item: end the list
             replace(NSRange(location: lineRange.location, length: sel.location - lineRange.location), with: "")
             return super.insertNewline(sender)
         }
@@ -274,11 +297,12 @@ final class EditorTextView: NSTextView {
             next = prefix.replacingCharacters(in: m, with: String(n + 1))
         }
         next = next.replacingOccurrences(of: "[x]", with: "[ ]").replacingOccurrences(of: "[X]", with: "[ ]")
-        insertText("\n" + indent + next, replacementRange: sel)
+        replace(sel, with: "\n" + indent + next)
     }
 
-    /// Tab / Shift-Tab indent list items.
+    /// Tab moves between table cells or indents list items.
     override func insertTab(_ sender: Any?) {
+        if moveToTableCell(forward: true) { return }
         if isOnListLine || selectedRange().length > 0 && selectionSpansLines {
             transformSelectedLines { $0.map { "    " + $0 } }
         } else {
@@ -287,6 +311,7 @@ final class EditorTextView: NSTextView {
     }
 
     override func insertBacktab(_ sender: Any?) {
+        if moveToTableCell(forward: false) { return }
         transformSelectedLines { lines in
             lines.map { line in
                 var l = line
@@ -306,6 +331,193 @@ final class EditorTextView: NSTextView {
 
     private var selectionSpansLines: Bool {
         nsString.substring(with: selectedRange()).contains("\n")
+    }
+
+    // MARK: - Auto pairing
+
+    private static let pairs: [String: String] = ["(": ")", "[": "]", "{": "}", "`": "`", "\"": "\""]
+    private static let wrappers: Set<String> = ["(", "[", "{", "`", "\"", "*", "_", "~"]
+
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        guard Settings.shared.autoPair, !hasMarkedText(), let s = insertString as? String, (s as NSString).length == 1 else {
+            return super.insertText(insertString, replacementRange: replacementRange)
+        }
+        let sel = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
+        let text = nsString
+        let next: unichar? = NSMaxRange(sel) < text.length ? text.character(at: NSMaxRange(sel)) : nil
+        let prev: unichar? = sel.location > 0 ? text.character(at: sel.location - 1) : nil
+        let nextString = next.map { String(utf16CodeUnits: [$0], count: 1) }
+
+        // Wrap a selection
+        if sel.length > 0, Self.wrappers.contains(s) {
+            let close = Self.pairs[s] ?? s
+            let inner = text.substring(with: sel)
+            replace(sel, with: s + inner + close, select: NSRange(location: 1, length: (inner as NSString).length))
+            return
+        }
+        // Type over an existing closing character
+        if sel.length == 0, Self.pairs.values.contains(s), nextString == s {
+            setSelectedRange(NSRange(location: sel.location + 1, length: 0))
+            return
+        }
+        // Insert a pair when followed by whitespace / end / closing punctuation
+        if sel.length == 0, let close = Self.pairs[s] {
+            let nextIsFree = nextString.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || ")]}.,;:".contains($0) } ?? true
+            let prevIsWord = prev.flatMap { Unicode.Scalar($0) }.map { CharacterSet.alphanumerics.contains($0) } ?? false
+            if nextIsFree && !(s == "\"" && prevIsWord) && !(s == "`" && prev == 0x60) {
+                super.insertText(s + close, replacementRange: sel)
+                setSelectedRange(NSRange(location: sel.location + 1, length: 0))
+                return
+            }
+        }
+        super.insertText(insertString, replacementRange: replacementRange)
+    }
+
+    override func deleteBackward(_ sender: Any?) {
+        let sel = selectedRange()
+        if Settings.shared.autoPair, sel.length == 0, sel.location > 0, sel.location < nsString.length {
+            let prev = nsString.substring(with: NSRange(location: sel.location - 1, length: 1))
+            let next = nsString.substring(with: NSRange(location: sel.location, length: 1))
+            if let close = Self.pairs[prev], close == next {
+                replace(NSRange(location: sel.location - 1, length: 2), with: "")
+                return
+            }
+        }
+        super.deleteBackward(sender)
+    }
+
+    // MARK: - Focus & typewriter modes
+
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        if !stillSelecting {
+            if focusMode { updateFocusDimming() }
+            if typewriterMode { centerCaret() }
+        }
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        if focusMode { updateFocusDimming() }
+        if typewriterMode { centerCaret() }
+    }
+
+    /// Dims everything except the paragraph containing the caret.
+    func updateFocusDimming() {
+        guard let lm = layoutManager else { return }
+        let full = NSRange(location: 0, length: nsString.length)
+        lm.removeTemporaryAttribute(.foregroundColor, forCharacterRange: full)
+        guard focusMode, full.length > 0 else { return }
+        let caret = min(selectedRange().location, max(0, nsString.length - 1))
+        let current = paragraphRange(around: caret)
+        let dim = NSColor.tertiaryLabelColor
+        if current.location > 0 {
+            lm.addTemporaryAttribute(.foregroundColor, value: dim, forCharacterRange: NSRange(location: 0, length: current.location))
+        }
+        if NSMaxRange(current) < full.length {
+            lm.addTemporaryAttribute(.foregroundColor, value: dim,
+                                     forCharacterRange: NSRange(location: NSMaxRange(current), length: full.length - NSMaxRange(current)))
+        }
+    }
+
+    /// Paragraph = run of non-blank lines.
+    private func paragraphRange(around index: Int) -> NSRange {
+        let text = nsString
+        var start = text.lineRange(for: NSRange(location: index, length: 0))
+        var end = start
+        while start.location > 0 {
+            let prev = text.lineRange(for: NSRange(location: start.location - 1, length: 0))
+            if text.substring(with: prev).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { break }
+            start = prev
+        }
+        while NSMaxRange(end) < text.length {
+            let next = text.lineRange(for: NSRange(location: NSMaxRange(end), length: 0))
+            if text.substring(with: next).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { break }
+            end = next
+        }
+        return NSUnionRange(start, end)
+    }
+
+    /// Keeps the caret line vertically centred.
+    func centerCaret() {
+        guard let lm = layoutManager, let clip = enclosingScrollView?.contentView else { return }
+        let location = selectedRange().location
+        var rect: NSRect
+        if location >= nsString.length, !lm.extraLineFragmentRect.isEmpty {
+            rect = lm.extraLineFragmentRect
+        } else if lm.numberOfGlyphs > 0 {
+            let glyph = min(lm.glyphIndexForCharacter(at: min(location, nsString.length - 1)), lm.numberOfGlyphs - 1)
+            rect = lm.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        } else {
+            return
+        }
+        let y = rect.midY + textContainerOrigin.y - clip.bounds.height / 2
+        clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: max(0, y)))
+        enclosingScrollView?.reflectScrolledClipView(clip)
+    }
+
+    // MARK: - Pasting and dropping
+
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        [.fileURL, .png, .tiff, .string]
+    }
+
+    override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+        [.fileURL, .png, .tiff, .string]
+    }
+
+    override func paste(_ sender: Any?) {
+        if handleFilesOrImages(from: .general, at: selectedRange()) { return }
+        pasteAsPlainText(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let point = convert(sender.draggingLocation, from: nil)
+        let index = characterIndexForInsertion(at: point)
+        if handleFilesOrImages(from: sender.draggingPasteboard, at: NSRange(location: index, length: 0)) {
+            window?.makeFirstResponder(self)
+            return true
+        }
+        return super.performDragOperation(sender)
+    }
+
+    /// Image files are inserted as images, other documents are opened; raw image data is saved next to the document.
+    func handleFilesOrImages(from pb: NSPasteboard, at range: NSRange) -> Bool {
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
+            let images = urls.filter { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .image) == true }
+            let documents = urls.filter { DocumentImporter.supportedExtensions.contains($0.pathExtension.lowercased()) }
+            if !images.isEmpty {
+                insertImageFiles(images, at: range)
+                return true
+            }
+            if !documents.isEmpty {
+                for url in documents {
+                    NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { _, _, _ in }
+                }
+                return true
+            }
+            return false
+        }
+        // Image data without text (screenshots, images copied from other apps)
+        if pb.string(forType: .string) == nil,
+           let data = pb.data(forType: .png)
+            ?? pb.data(forType: .tiff).flatMap({ NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) }) {
+            if let path = ImageStore.store(data: data, ext: "png", suggestedName: L("image.pasted", "image"),
+                                           for: markdownDocument, window: window) {
+                replace(range, with: "![](\(path))")
+            }
+            return true
+        }
+        return false
+    }
+
+    func insertImageFiles(_ urls: [URL], at range: NSRange) {
+        let refs = urls.compactMap { url -> String? in
+            guard let path = ImageStore.reference(for: url, document: markdownDocument) else { return nil }
+            return "![\(url.deletingPathExtension().lastPathComponent)](\(path))"
+        }
+        guard !refs.isEmpty else { return }
+        replace(range, with: refs.joined(separator: "\n"))
     }
 
     /// Pastes rich text (e.g. copied from Word or a web page) converted to Markdown.
@@ -329,8 +541,24 @@ final class EditorTextView: NSTextView {
         replace(selectedRange(), with: markdown)
     }
 
-    // Paste plain text only (rich text would be meaningless in Markdown source)
-    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        [.string]
+    /// Copies the selection (or the whole document) as formatted text for Mail, Word, Pages…
+    @objc func copyAsRichText(_ sender: Any?) {
+        let sel = selectedRange()
+        let source = sel.length > 0 ? nsString.substring(with: sel) : string
+        let options = ExportOptions(title: "", baseURL: markdownDocument?.baseDirectory, theme: Settings.shared.previewTheme)
+        let html = PDFExporter.html(markdown: source, options: options)
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        if let attributed = NSAttributedString(html: Data(html.utf8),
+                                               options: [.documentType: NSAttributedString.DocumentType.html,
+                                                         .characterEncoding: String.Encoding.utf8.rawValue],
+                                               documentAttributes: nil),
+           let rtf = attributed.rtf(from: NSRange(location: 0, length: attributed.length), documentAttributes: [:]) {
+            pb.setData(rtf, forType: .rtf)
+            pb.setString(attributed.string, forType: .string)
+        } else {
+            pb.setString(source, forType: .string)
+        }
+        pb.setString(html, forType: .html)
     }
 }

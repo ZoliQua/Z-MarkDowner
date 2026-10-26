@@ -21,11 +21,17 @@ public struct DocxWriter {
     public var title: String
     /// Resolves an image URL from the Markdown source into embeddable data.
     public var imageLoader: ((String) -> DocxImage?)?
+    /// Optional pre-rendered math images keyed by TeX source (`display` = block math).
+    public var mathImage: ((_ tex: String, _ display: Bool) -> DocxImage?)?
 
     private var relationships: [(id: String, type: String, target: String, external: Bool)] = []
     private var nums: [(numId: Int, abstractId: Int, level: Int, start: Int?)] = []
     private var media: [(name: String, data: Data)] = []
     private var drawingCounter = 0
+    private var footnoteDefinitions: [String: MDFootnote] = [:]
+    private var footnoteNumbers: [String: Int] = [:]
+    private var footnoteBodies: [(Int, String)] = []
+    private var frontMatter: [String: String] = [:]
 
     private static let relHyperlink = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
     private static let relImage = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
@@ -43,18 +49,26 @@ public struct DocxWriter {
     }
 
     public mutating func makeDocx(markdown: String) -> Data {
-        makeDocx(blocks: MDDocument(markdown: markdown).blocks)
+        makeDocx(document: MDDocument(markdown: markdown))
     }
 
     public mutating func makeDocx(blocks: [MDBlock]) -> Data {
+        makeDocx(document: MDDocument(blocks: blocks))
+    }
+
+    public mutating func makeDocx(document: MDDocument) -> Data {
         relationships = []
         nums = []
         media = []
         drawingCounter = 0
+        footnoteNumbers = [:]
+        footnoteBodies = []
+        footnoteDefinitions = Dictionary(document.footnotes.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        frontMatter = document.frontMatter
 
-        var body = ""
+        var body = frontMatterParagraphs()
         let ctx = Context()
-        for block in blocks {
+        for block in document.blocks {
             body += render(block, ctx)
         }
         if body.isEmpty { body = "<w:p/>" }
@@ -80,7 +94,10 @@ public struct DocxWriter {
         zip.add(path: "word/styles.xml", string: DocxWriter.styles)
         zip.add(path: "word/numbering.xml", string: numbering())
         zip.add(path: "word/settings.xml", string: DocxWriter.settings)
+        zip.add(path: "word/footnotes.xml", string: footnotesXML())
         zip.add(path: "word/_rels/document.xml.rels", string: documentRels())
+        // Footnotes may contain links and images, so they get the same relationships
+        zip.add(path: "word/_rels/footnotes.xml.rels", string: documentRels())
         for m in media {
             zip.add(path: "word/media/\(m.name)", data: m.data)
         }
@@ -95,6 +112,22 @@ public struct DocxWriter {
         var numId: Int?
         var isFirstInItem = false
         var taskPrefix: String?
+        var paragraphStyle: String?
+    }
+
+    private func frontMatterParagraphs() -> String {
+        var out = ""
+        if let title = frontMatter["title"], !title.isEmpty {
+            out += "<w:p><w:pPr><w:pStyle w:val=\"Title\"/></w:pPr>\(textRun(title, RunStyle()))</w:p>"
+        }
+        if let subtitle = frontMatter["subtitle"], !subtitle.isEmpty {
+            out += "<w:p><w:pPr><w:pStyle w:val=\"Subtitle\"/></w:pPr>\(textRun(subtitle, RunStyle()))</w:p>"
+        }
+        let meta = [frontMatter["author"], frontMatter["date"]].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        if !meta.isEmpty {
+            out += "<w:p><w:pPr><w:pStyle w:val=\"DocMeta\"/></w:pPr>\(textRun(meta, RunStyle()))</w:p>"
+        }
+        return out
     }
 
     private mutating func render(_ block: MDBlock, _ ctx: Context) -> String {
@@ -159,6 +192,13 @@ public struct DocxWriter {
         case .table(let table):
             return renderTable(table, ctx)
 
+        case .mathBlock(let tex):
+            if let image = mathImage?(tex, true) {
+                return "<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr>\(drawing(image, alt: tex))</w:p>"
+            }
+            var style = RunStyle(); style.math = true
+            return "<w:p><w:pPr><w:pStyle w:val=\"MathBlock\"/></w:pPr>\(textRun(tex, style))</w:p>"
+
         case .horizontalRule:
             return "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\" w:sz=\"6\" w:space=\"1\" w:color=\"AAAAAA\"/></w:pBdr></w:pPr></w:p>"
         }
@@ -170,6 +210,7 @@ public struct DocxWriter {
         if styleName == nil {
             if ctx.quoteDepth > 0 { styleName = "Quote" }
             else if ctx.listLevel >= 0 { styleName = "ListParagraph" }
+            else { styleName = ctx.paragraphStyle }
         }
         if let s = styleName { ppr += "<w:pStyle w:val=\"\(s)\"/>" }
         if ctx.listLevel >= 0, let numId = ctx.numId {
@@ -249,6 +290,7 @@ public struct DocxWriter {
         var strike = false
         var code = false
         var hyperlink = false
+        var math = false
     }
 
     private mutating func runs(_ inlines: [MDInline], _ style: RunStyle) -> String {
@@ -290,6 +332,15 @@ public struct DocxWriter {
                 out += "<w:r><w:br/></w:r>"
             case .softBreak:
                 out += textRun(" ", style)
+            case .math(let tex):
+                if let image = mathImage?(tex, false) {
+                    out += drawing(image, alt: tex)
+                } else {
+                    var s = style; s.math = true
+                    out += textRun(tex, s)
+                }
+            case .footnoteRef(let id):
+                out += footnoteReference(id, style)
             }
         }
         return out
@@ -303,11 +354,59 @@ public struct DocxWriter {
         if style.code {
             rpr += "<w:rFonts w:ascii=\"Courier New\" w:hAnsi=\"Courier New\" w:cs=\"Courier New\"/>"
         }
+        if style.math {
+            rpr += "<w:rFonts w:ascii=\"Cambria Math\" w:hAnsi=\"Cambria Math\" w:cs=\"Cambria Math\"/><w:i/>"
+        }
         if style.bold { rpr += "<w:b/><w:bCs/>" }
         if style.italic { rpr += "<w:i/><w:iCs/>" }
         if style.strike { rpr += "<w:strike/>" }
         let rPr = rpr.isEmpty ? "" : "<w:rPr>\(rpr)</w:rPr>"
         return "<w:r>\(rPr)<w:t xml:space=\"preserve\">\(xml(text))</w:t></w:r>"
+    }
+
+    // MARK: - Footnotes
+
+    private mutating func footnoteReference(_ id: String, _ style: RunStyle) -> String {
+        guard let def = footnoteDefinitions[id] else { return textRun("[^\(id)]", style) }
+        let number: Int
+        if let n = footnoteNumbers[id] {
+            number = n
+        } else {
+            number = footnoteNumbers.count + 1
+            footnoteNumbers[id] = number
+            var ctx = Context()
+            ctx.paragraphStyle = "FootnoteText"
+            var body = def.blocks.map { render($0, ctx) }.joined()
+            let refRun = "<w:r><w:rPr><w:rStyle w:val=\"FootnoteReference\"/></w:rPr><w:footnoteRef/></w:r>"
+                + "<w:r><w:t xml:space=\"preserve\"> </w:t></w:r>"
+            if let range = body.range(of: "</w:pPr>") {
+                body.insert(contentsOf: refRun, at: range.upperBound)
+            } else {
+                body = "<w:p><w:pPr><w:pStyle w:val=\"FootnoteText\"/></w:pPr>\(refRun)</w:p>" + body
+            }
+            footnoteBodies.append((number, body))
+        }
+        return "<w:r><w:rPr><w:rStyle w:val=\"FootnoteReference\"/></w:rPr><w:footnoteReference w:id=\"\(number)\"/></w:r>"
+    }
+
+    private func footnotesXML() -> String {
+        var notes = """
+        <w:footnote w:type="separator" w:id="-1"><w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>\
+        <w:r><w:separator/></w:r></w:p></w:footnote>\
+        <w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>\
+        <w:r><w:continuationSeparator/></w:r></w:p></w:footnote>
+        """
+        for (n, body) in footnoteBodies {
+            notes += "<w:footnote w:id=\"\(n)\">\(body)</w:footnote>"
+        }
+        return """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" \
+        xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" \
+        xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" \
+        xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" \
+        xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">\(notes)</w:footnotes>
+        """
     }
 
     private mutating func drawing(_ image: DocxImage, alt: String) -> String {
@@ -362,6 +461,7 @@ public struct DocxWriter {
         <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>\
         <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>\
         <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>\
+        <Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>\
         <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>\
         <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>\
         <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>\
@@ -382,7 +482,8 @@ public struct DocxWriter {
         var rels = """
         <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>\
         <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>\
-        <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>
+        <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>\
+        <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>
         """
         for r in relationships {
             let mode = r.external ? " TargetMode=\"External\"" : ""
@@ -402,7 +503,8 @@ public struct DocxWriter {
         <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" \
         xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" \
         xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">\
-        <dc:title>\(xml(title))</dc:title><dc:creator>Z-MarkDowner</dc:creator>\
+        <dc:title>\(xml(frontMatter["title"] ?? title))</dc:title><dc:creator>\(xml(frontMatter["author"] ?? "Z-MarkDowner"))</dc:creator>\
+        \(frontMatter["keywords"].map { "<cp:keywords>\(xml($0))</cp:keywords>" } ?? "")\
         <dcterms:created xsi:type="dcterms:W3CDTF">\(now)</dcterms:created>\
         <dcterms:modified xsi:type="dcterms:W3CDTF">\(now)</dcterms:modified>\
         </cp:coreProperties>
@@ -452,6 +554,7 @@ public struct DocxWriter {
     <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
     <w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">\
     <w:defaultTabStop w:val="708"/><w:characterSpacingControl w:val="doNotCompress"/>\
+    <w:footnotePr><w:footnote w:id="-1"/><w:footnote w:id="0"/></w:footnotePr>\
     <w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat>\
     </w:settings>
     """
@@ -479,6 +582,17 @@ public struct DocxWriter {
     \(headingStyle(4, size: 24, color: "1F2328"))\
     \(headingStyle(5, size: 22, color: "1F2328"))\
     \(headingStyle(6, size: 22, color: "595959", italic: true))\
+    <w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>\
+    <w:pPr><w:spacing w:after="80"/><w:contextualSpacing/></w:pPr><w:rPr><w:b/><w:sz w:val="52"/><w:szCs w:val="52"/></w:rPr></w:style>\
+    <w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>\
+    <w:pPr><w:spacing w:after="80"/></w:pPr><w:rPr><w:color w:val="595959"/><w:sz w:val="30"/><w:szCs w:val="30"/></w:rPr></w:style>\
+    <w:style w:type="paragraph" w:styleId="DocMeta"><w:name w:val="Document Meta"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/>\
+    <w:pPr><w:pBdr><w:bottom w:val="single" w:sz="4" w:space="6" w:color="D0D7DE"/></w:pBdr><w:spacing w:after="360"/></w:pPr>\
+    <w:rPr><w:i/><w:color w:val="595959"/></w:rPr></w:style>\
+    <w:style w:type="paragraph" w:styleId="FootnoteText"><w:name w:val="footnote text"/><w:basedOn w:val="Normal"/>\
+    <w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr></w:style>\
+    <w:style w:type="character" w:styleId="FootnoteReference"><w:name w:val="footnote reference"/><w:rPr><w:vertAlign w:val="superscript"/></w:rPr></w:style>\
+    <w:style w:type="paragraph" w:styleId="MathBlock"><w:name w:val="Math Block"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/></w:pPr></w:style>\
     <w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:qFormat/>\
     <w:pPr><w:pBdr><w:left w:val="single" w:sz="18" w:space="8" w:color="D0D7DE"/></w:pBdr><w:ind w:left="567"/></w:pPr>\
     <w:rPr><w:color w:val="59636E"/></w:rPr></w:style>\

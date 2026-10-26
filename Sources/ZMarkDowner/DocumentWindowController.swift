@@ -1,31 +1,33 @@
 import AppKit
+import PDFKit
 import UniformTypeIdentifiers
 import MarkDownerCore
 
 enum ViewMode: Int {
     case editor = 0, split = 1, preview = 2
-
-    static var preferred: ViewMode {
-        get { ViewMode(rawValue: UserDefaults.standard.integer(forKey: "viewMode")) ?? .split }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "viewMode") }
-    }
 }
 
 final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTextViewDelegate,
                                       NSToolbarDelegate, NSSplitViewDelegate, NSMenuItemValidation {
 
-    private let splitView = NSSplitView()
+    private let mainSplit = NSSplitView()
+    private let contentSplit = NSSplitView()
+    private let sidebar = SidebarView(frame: .zero)
     private let editorScroll = NSScrollView()
     private(set) var editor: EditorTextView!
-    private let preview = PreviewView(frame: .zero)
+    let preview = PreviewView(frame: .zero)
     private let statusLabel = NSTextField(labelWithString: "")
+    private let positionLabel = NSTextField(labelWithString: "")
     private let messageLabel = NSTextField(labelWithString: "")
     private var modeControl: NSSegmentedControl?
 
-    private let highlighter: MarkdownHighlighter
+    private let highlighter = MarkdownHighlighter()
     private var previewWork: DispatchWorkItem?
-    private var highlightWork: DispatchWorkItem?
     private var messageWork: DispatchWorkItem?
+    private var pendingEdit: (range: NSRange, replacement: String, replaced: String)?
+    private var lineStarts: [Int] = [0]
+    private var syncSource: (side: Int, time: TimeInterval) = (0, 0)   // 1 = editor, 2 = preview
+    private var observers: [NSObjectProtocol] = []
 
     private(set) var mode: ViewMode = .split
 
@@ -35,20 +37,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     var markdownDocument: MarkdownDocument? { (document as? MarkdownDocument) ?? ownerDocument }
 
-    static var editorFontSize: CGFloat {
-        get {
-            let v = UserDefaults.standard.double(forKey: "editorFontSize")
-            return v > 0 ? CGFloat(v) : 14
-        }
-        set { UserDefaults.standard.set(Double(newValue), forKey: "editorFontSize") }
-    }
-
     init(document: MarkdownDocument) {
-        highlighter = MarkdownHighlighter(fontSize: Self.editorFontSize)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 800),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered, defer: false)
-        window.minSize = NSSize(width: 560, height: 360)
+        window.minSize = NSSize(width: 600, height: 380)
         window.collectionBehavior.insert(.fullScreenPrimary)
         window.titlebarSeparatorStyle = .line
         window.toolbarStyle = .unified
@@ -58,13 +51,28 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         window.delegate = self
         buildUI()
         buildToolbar()
+        applySettings()
         loadDocumentText()
-        setMode(document.importedFrom != nil ? .split : ViewMode.preferred, remember: false)
+        setMode(document.importedFrom != nil ? .split : Settings.shared.defaultViewMode, remember: false)
+        setSidebarVisible(Settings.shared.showSidebar, remember: false)
         window.setFrameAutosaveName("ZMarkDownerDocumentWindow")
         if window.frame.origin == .zero { window.center() }
+
+        observers.append(NotificationCenter.default.addObserver(forName: Settings.didChange, object: nil, queue: .main) { [weak self] _ in
+            self?.applySettings()
+        })
+        editorScroll.contentView.postsBoundsChangedNotifications = true
+        observers.append(NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification,
+                                                                object: editorScroll.contentView, queue: .main) { [weak self] _ in
+            self?.editorDidScroll()
+        })
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    deinit {
+        observers.forEach(NotificationCenter.default.removeObserver)
+    }
 
     // MARK: - UI
 
@@ -94,14 +102,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         editor.isAutomaticDashSubstitutionEnabled = false
         editor.isAutomaticTextReplacementEnabled = false
         editor.isAutomaticSpellingCorrectionEnabled = false
-        editor.isContinuousSpellCheckingEnabled = true
         editor.smartInsertDeleteEnabled = false
         editor.drawsBackground = true
         editor.backgroundColor = .textBackgroundColor
         editor.insertionPointColor = .controlAccentColor
         editor.delegate = self
-        editor.typingAttributes = highlighter.baseAttributes
-        editor.setAccessibilityLabel("Markdown szerkesztő")
+        editor.setAccessibilityLabel(L("editor.accessibility", "Markdown editor"))
 
         editorScroll.documentView = editor
         editorScroll.hasVerticalScroller = true
@@ -110,12 +116,22 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         editorScroll.backgroundColor = .textBackgroundColor
         editorScroll.borderType = .noBorder
 
-        splitView.isVertical = true
-        splitView.dividerStyle = .thin
-        splitView.delegate = self
-        splitView.addArrangedSubview(editorScroll)
-        splitView.addArrangedSubview(preview)
-        splitView.translatesAutoresizingMaskIntoConstraints = false
+        contentSplit.isVertical = true
+        contentSplit.dividerStyle = .thin
+        contentSplit.delegate = self
+        contentSplit.addArrangedSubview(editorScroll)
+        contentSplit.addArrangedSubview(preview)
+
+        mainSplit.isVertical = true
+        mainSplit.dividerStyle = .thin
+        mainSplit.delegate = self
+        mainSplit.addArrangedSubview(sidebar)
+        mainSplit.addArrangedSubview(contentSplit)
+        mainSplit.setHoldingPriority(.defaultHigh, forSubviewAt: 0)
+        mainSplit.translatesAutoresizingMaskIntoConstraints = false
+
+        sidebar.onSelectHeading = { [weak self] line in self?.reveal(line: line) }
+        preview.onScroll = { [weak self] line in self?.previewDidScroll(line) }
 
         // Status bar
         let statusBar = NSVisualEffectView()
@@ -125,8 +141,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         let separator = NSBox()
         separator.boxType = .separator
         separator.translatesAutoresizingMaskIntoConstraints = false
-        for label in [statusLabel, messageLabel] {
-            label.font = .systemFont(ofSize: 11)
+        for label in [statusLabel, positionLabel, messageLabel] {
+            label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
             label.textColor = .secondaryLabelColor
             label.translatesAutoresizingMaskIntoConstraints = false
             label.lineBreakMode = .byTruncatingMiddle
@@ -136,13 +152,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         messageLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         statusBar.addSubview(separator)
 
-        content.addSubview(splitView)
+        content.addSubview(mainSplit)
         content.addSubview(statusBar)
         NSLayoutConstraint.activate([
-            splitView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            splitView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            splitView.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
-            splitView.bottomAnchor.constraint(equalTo: statusBar.topAnchor),
+            mainSplit.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            mainSplit.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            mainSplit.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
+            mainSplit.bottomAnchor.constraint(equalTo: statusBar.topAnchor),
             statusBar.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             statusBar.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             statusBar.bottomAnchor.constraint(equalTo: content.bottomAnchor),
@@ -152,10 +168,33 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
             separator.trailingAnchor.constraint(equalTo: statusBar.trailingAnchor),
             statusLabel.leadingAnchor.constraint(equalTo: statusBar.leadingAnchor, constant: 12),
             statusLabel.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
-            messageLabel.leadingAnchor.constraint(greaterThanOrEqualTo: statusLabel.trailingAnchor, constant: 12),
+            positionLabel.leadingAnchor.constraint(equalTo: statusLabel.trailingAnchor, constant: 16),
+            positionLabel.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
+            messageLabel.leadingAnchor.constraint(greaterThanOrEqualTo: positionLabel.trailingAnchor, constant: 12),
             messageLabel.trailingAnchor.constraint(equalTo: statusBar.trailingAnchor, constant: -12),
             messageLabel.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
         ])
+    }
+
+    private var appliedPreviewKey = ""
+
+    private func applySettings() {
+        let settings = Settings.shared
+        if highlighter.baseFont != settings.editorFont() || highlighter.fontSize != settings.editorFontSize {
+            highlighter.updateFonts()
+            rehighlight()
+        }
+        editor.readableWidth = settings.readableWidth
+        editor.isContinuousSpellCheckingEnabled = settings.spellCheck
+        if editor.focusMode != settings.focusMode { editor.focusMode = settings.focusMode }
+        if editor.typewriterMode != settings.typewriterMode { editor.typewriterMode = settings.typewriterMode }
+        editor.typingAttributes = highlighter.baseAttributes
+        // Reload the preview page only when its appearance settings changed
+        let previewKey = "\(settings.previewTheme.rawValue)|\(settings.customCSS.hashValue)|\(settings.renderMath)|\(settings.renderDiagrams)"
+        if previewKey != appliedPreviewKey {
+            appliedPreviewKey = previewKey
+            preview.reloadShell()
+        }
     }
 
     // MARK: - Document text
@@ -166,9 +205,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         preview.baseDirectory = markdownDocument?.baseDirectory
         rehighlight()
         preview.update(markdown: text)
+        documentStructureChanged()
         updateStatus()
         editor.setSelectedRange(NSRange(location: 0, length: 0))
         markdownDocument?.undoManager?.removeAllActions()
+        sidebar.currentFile = markdownDocument?.fileURL
+        sidebar.documentFolderChanged(markdownDocument?.baseDirectory)
     }
 
     /// Called when the document re-reads its file (e.g. Revert).
@@ -177,45 +219,104 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         loadDocumentText()
     }
 
+    /// Called after the document was saved to a (possibly new) location.
+    func documentLocationChanged() {
+        preview.baseDirectory = markdownDocument?.baseDirectory
+        sidebar.currentFile = markdownDocument?.fileURL
+        sidebar.documentFolderChanged(markdownDocument?.baseDirectory)
+        sidebar.reloadFiles()
+    }
+
     func commitEditing() {
         guard editor != nil else { return }
         markdownDocument?.text = editor.string
     }
 
+    func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        let replaced = (textView.string as NSString).substring(with: affectedCharRange)
+        pendingEdit = (affectedCharRange, replacementString ?? "", replaced)
+        return true
+    }
+
     func textDidChange(_ notification: Notification) {
         markdownDocument?.text = editor.string
-        scheduleHighlight()
+        if let storage = editor.textStorage {
+            if let edit = pendingEdit {
+                highlighter.highlight(storage, editedRange: edit.range, replacement: edit.replacement, replaced: edit.replaced)
+            } else {
+                highlighter.highlight(storage)
+            }
+            editor.typingAttributes = highlighter.baseAttributes
+            if editor.focusMode { editor.updateFocusDimming() }
+        }
+        pendingEdit = nil
+        refreshLineStarts()
         schedulePreview()
         updateStatus()
     }
 
-    private func scheduleHighlight() {
-        highlightWork?.cancel()
-        let length = (editor.string as NSString).length
-        if length < 60_000 {
-            rehighlight()
-            return
+    func textViewDidChangeSelection(_ notification: Notification) {
+        updatePosition()
+    }
+
+    /// Removes spelling / grammar marks inside code, URLs and math.
+    func textView(_ view: NSTextView, didCheckTextIn range: NSRange, types checkingTypes: NSTextCheckingTypes,
+                  options: [NSSpellChecker.OptionKey: Any] = [:], results: [NSTextCheckingResult],
+                  orthography: NSOrthography, wordCount: Int) -> [NSTextCheckingResult] {
+        let excluded = highlighter.noSpellRanges
+        guard !excluded.isEmpty else { return results }
+        return results.filter { result in
+            guard result.resultType == .spelling || result.resultType == .grammar else { return true }
+            return !excluded.contains { NSIntersectionRange($0, result.range).length > 0 }
         }
-        let work = DispatchWorkItem { [weak self] in self?.rehighlight() }
-        highlightWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
 
     private func rehighlight() {
         guard let storage = editor.textStorage else { return }
         highlighter.highlight(storage)
         editor.typingAttributes = highlighter.baseAttributes
+        if editor.focusMode { editor.updateFocusDimming() }
     }
 
     private func schedulePreview() {
-        guard mode != .editor else { return }
         previewWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.preview.update(markdown: self.editor.string)
+            if self.mode != .editor { self.preview.update(markdown: self.editor.string) }
+            self.documentStructureChanged()
         }
         previewWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    private func refreshLineStarts() {
+        let text = editor.string as NSString
+        var starts = [0]
+        var location = 0
+        while location < text.length {
+            let r = text.range(of: "\n", options: [], range: NSRange(location: location, length: text.length - location))
+            guard r.location != NSNotFound else { break }
+            starts.append(NSMaxRange(r))
+            location = NSMaxRange(r)
+        }
+        lineStarts = starts
+    }
+
+    /// Updates the outline and the line index used for scroll synchronisation.
+    private func documentStructureChanged() {
+        refreshLineStarts()
+        let doc = MDDocument(markdown: editor.string)
+        sidebar.setHeadings(doc.outline.map { SidebarView.Heading(level: $0.level, text: $0.text, line: $0.line) })
+        sidebar.highlightHeading(forLine: lineNumber(at: editor.selectedRange().location))
+    }
+
+    private func lineNumber(at index: Int) -> Int {
+        var lo = 0, hi = lineStarts.count - 1
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2
+            if lineStarts[mid] <= index { lo = mid } else { hi = mid - 1 }
+        }
+        return lo
     }
 
     private func updateStatus() {
@@ -224,8 +325,19 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         text.enumerateSubstrings(in: text.startIndex..., options: [.byWords, .substringNotRequired]) { _, _, _, _ in
             words += 1
         }
-        let lines = text.isEmpty ? 0 : text.components(separatedBy: "\n").count
-        statusLabel.stringValue = "\(words) szó · \(text.count) karakter · \(lines) sor"
+        let lines = text.isEmpty ? 0 : lineStarts.count
+        statusLabel.stringValue = LF("status.counts", "%d words · %d characters · %d lines", words, text.count, lines)
+        updatePosition()
+    }
+
+    private func updatePosition() {
+        let sel = editor.selectedRange()
+        let line = lineNumber(at: sel.location)
+        let column = sel.location - (line < lineStarts.count ? lineStarts[line] : 0) + 1
+        var text = LF("status.position", "Ln %d, Col %d", line + 1, column)
+        if sel.length > 0 { text += " · " + LF("status.selected", "%d selected", sel.length) }
+        positionLabel.stringValue = text
+        sidebar.highlightHeading(forLine: line)
     }
 
     func showMessage(_ message: String) {
@@ -236,27 +348,87 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: work)
     }
 
+    // MARK: - Scroll synchronisation
+
+    /// Source line at the top of the editor (fractional), or -1 when scrolled to the end.
+    func editorTopLine() -> Double {
+        guard let lm = editor.layoutManager, let tc = editor.textContainer else { return 0 }
+        let clip = editorScroll.contentView
+        if clip.bounds.maxY >= editor.frame.height - 2, clip.bounds.minY > 0 { return -1 }
+        let y = clip.bounds.minY - editor.textContainerOrigin.y
+        guard lm.numberOfGlyphs > 0 else { return 0 }
+        let glyph = lm.glyphIndex(for: NSPoint(x: 0, y: max(0, y)), in: tc)
+        let charIndex = lm.characterIndexForGlyph(at: glyph)
+        let line = lineNumber(at: charIndex)
+        let rect = lm.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        let fraction = rect.height > 0 ? max(0, min(1, (y - rect.minY) / rect.height)) : 0
+        return Double(line) + Double(fraction)
+    }
+
+    private func editorDidScroll() {
+        guard Settings.shared.syncScroll, mode == .split else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if syncSource.side == 2 && now - syncSource.time < 0.25 { return }
+        syncSource = (1, now)
+        preview.scroll(toLine: editorTopLine())
+    }
+
+    private func previewDidScroll(_ line: Double) {
+        guard Settings.shared.syncScroll, mode == .split else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if syncSource.side == 1 && now - syncSource.time < 0.25 { return }
+        syncSource = (2, now)
+        scrollEditor(toLine: line)
+    }
+
+    func scrollEditor(toLine line: Double) {
+        guard let lm = editor.layoutManager else { return }
+        let clip = editorScroll.contentView
+        if line < 0 {
+            clip.scroll(to: NSPoint(x: 0, y: max(0, editor.frame.height - clip.bounds.height)))
+        } else {
+            let index = Int(line)
+            guard index < lineStarts.count, lm.numberOfGlyphs > 0 else { return }
+            let charIndex = min(lineStarts[index], max(0, (editor.string as NSString).length - 1))
+            let glyph = lm.glyphIndexForCharacter(at: charIndex)
+            let rect = lm.lineFragmentRect(forGlyphAt: min(glyph, lm.numberOfGlyphs - 1), effectiveRange: nil)
+            let y = rect.minY + rect.height * CGFloat(line - Double(index))
+            clip.scroll(to: NSPoint(x: 0, y: max(0, y)))
+        }
+        editorScroll.reflectScrolledClipView(clip)
+    }
+
+    /// Jumps to a source line in the editor and the preview (outline navigation).
+    func reveal(line: Int) {
+        let index = max(0, min(line, lineStarts.count - 1))
+        let location = lineStarts[index]
+        syncSource = (1, ProcessInfo.processInfo.systemUptime)
+        if mode != .preview {
+            window?.makeFirstResponder(editor)
+            editor.setSelectedRange(NSRange(location: location, length: 0))
+            scrollEditor(toLine: Double(index))
+        }
+        if mode != .editor { preview.scroll(toLine: Double(index)) }
+    }
+
     // MARK: - View modes
 
     func setMode(_ newMode: ViewMode, remember: Bool = true) {
         mode = newMode
-        if remember { ViewMode.preferred = newMode }
+        if remember { Settings.shared.defaultViewMode = newMode }
         editorScroll.isHidden = newMode == .preview
         preview.isHidden = newMode == .editor
-        splitView.adjustSubviews()
+        contentSplit.adjustSubviews()
         if newMode == .split {
-            splitView.setPosition(splitView.bounds.width / 2, ofDividerAt: 0)
+            contentSplit.setPosition(contentSplit.bounds.width / 2, ofDividerAt: 0)
         }
         if newMode != .editor {
             preview.baseDirectory = markdownDocument?.baseDirectory
             preview.update(markdown: editor.string)
+            if newMode == .split { preview.scroll(toLine: editorTopLine()) }
         }
         modeControl?.selectedSegment = newMode.rawValue
-        if newMode == .preview {
-            window?.makeFirstResponder(preview)
-        } else {
-            window?.makeFirstResponder(editor)
-        }
+        window?.makeFirstResponder(newMode == .preview ? preview : editor)
         window?.toolbar?.validateVisibleItems()
     }
 
@@ -269,41 +441,46 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         setMode(ViewMode(rawValue: sender.selectedSegment) ?? .split)
     }
 
+    func setSidebarVisible(_ visible: Bool, remember: Bool = true) {
+        if remember { Settings.shared.showSidebar = visible }
+        sidebar.isHidden = !visible
+        mainSplit.adjustSubviews()
+        if visible { mainSplit.setPosition(240, ofDividerAt: 0) }
+    }
+
+    var isSidebarVisible: Bool { !sidebar.isHidden }
+
+    @objc func toggleDocumentSidebar(_ sender: Any?) { setSidebarVisible(sidebar.isHidden) }
+    @objc func showOutline(_ sender: Any?) { setSidebarVisible(true); sidebar.selectedTab = 0 }
+    @objc func showFiles(_ sender: Any?) { setSidebarVisible(true); sidebar.selectedTab = 1 }
+    @objc func toggleSyncScroll(_ sender: Any?) { Settings.shared.syncScroll.toggle() }
+    @objc func toggleFocusMode(_ sender: Any?) { Settings.shared.focusMode.toggle() }
+    @objc func toggleTypewriterMode(_ sender: Any?) { Settings.shared.typewriterMode.toggle() }
+
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat,
                    ofSubviewAt dividerIndex: Int) -> CGFloat {
-        max(proposedMinimumPosition, 240)
+        splitView === mainSplit ? max(proposedMinimumPosition, 160) : max(proposedMinimumPosition, 240)
     }
 
     func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat,
                    ofSubviewAt dividerIndex: Int) -> CGFloat {
-        min(proposedMaximumPosition, splitView.bounds.width - 240)
+        splitView === mainSplit ? min(proposedMaximumPosition, 420) : min(proposedMaximumPosition, splitView.bounds.width - 240)
     }
 
     func windowDidResize(_ notification: Notification) {
-        // Keep the split balanced when entering/leaving full screen
         if mode == .split, !editorScroll.isHidden, !preview.isHidden {
-            let w = splitView.bounds.width
+            let w = contentSplit.bounds.width
             let current = editorScroll.frame.width
-            if current < 240 || current > w - 240 { splitView.setPosition(w / 2, ofDividerAt: 0) }
+            if current < 240 || current > w - 240 { contentSplit.setPosition(w / 2, ofDividerAt: 0) }
         }
+        editor.updateInsets()
     }
 
     // MARK: - Editor font size
 
-    @objc func increaseFontSize(_ sender: Any?) { changeFontSize(by: 1) }
-    @objc func decreaseFontSize(_ sender: Any?) { changeFontSize(by: -1) }
-    @objc func resetFontSize(_ sender: Any?) { changeFontSize(to: 14) }
-
-    private func changeFontSize(by delta: CGFloat) {
-        changeFontSize(to: highlighter.fontSize + delta)
-    }
-
-    private func changeFontSize(to size: CGFloat) {
-        let clamped = min(max(size, 9), 36)
-        highlighter.fontSize = clamped
-        Self.editorFontSize = clamped
-        rehighlight()
-    }
+    @objc func increaseFontSize(_ sender: Any?) { Settings.shared.editorFontSize += 1 }
+    @objc func decreaseFontSize(_ sender: Any?) { Settings.shared.editorFontSize -= 1 }
+    @objc func resetFontSize(_ sender: Any?) { Settings.shared.editorFontSize = 14 }
 
     // MARK: - Formatting forwarding
 
@@ -320,13 +497,23 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         #selector(EditorTextView.formatNumberedList(_:)), #selector(EditorTextView.formatTaskList(_:)),
         #selector(EditorTextView.formatQuote(_:)), #selector(EditorTextView.insertCodeBlock(_:)),
         #selector(EditorTextView.insertTable(_:)), #selector(EditorTextView.insertHorizontalRule(_:)),
-        #selector(EditorTextView.pasteAsMarkdown(_:)),
+        #selector(EditorTextView.pasteAsMarkdown(_:)), #selector(EditorTextView.insertFootnote(_:)),
+        #selector(EditorTextView.insertInlineMath(_:)), #selector(EditorTextView.insertMathBlock(_:)),
+        #selector(EditorTextView.insertDiagram(_:)), #selector(EditorTextView.formatTable(_:)),
+        #selector(EditorTextView.tableInsertRow(_:)), #selector(EditorTextView.tableInsertColumn(_:)),
+        #selector(EditorTextView.tableDeleteRow(_:)), #selector(EditorTextView.tableDeleteColumn(_:)),
+        #selector(EditorTextView.tableAlignLeft(_:)), #selector(EditorTextView.tableAlignCenter(_:)),
+        #selector(EditorTextView.tableAlignRight(_:)),
     ]
+
+    /// Commands that only read the text keep working in preview mode.
+    static let readOnlySelectors: Set<Selector> = [#selector(EditorTextView.copyAsRichText(_:))]
 
     override func responds(to aSelector: Selector!) -> Bool {
         if let aSelector, Self.formattingSelectors.contains(aSelector) {
             return mode != .preview
         }
+        if let aSelector, Self.readOnlySelectors.contains(aSelector) { return true }
         return super.responds(to: aSelector)
     }
 
@@ -335,6 +522,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
             if window?.firstResponder !== editor { window?.makeFirstResponder(editor) }
             return editor
         }
+        if let aSelector, Self.readOnlySelectors.contains(aSelector) { return editor }
         return super.forwardingTarget(for: aSelector)
     }
 
@@ -343,6 +531,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         case #selector(showEditorOnly(_:)): menuItem.state = mode == .editor ? .on : .off
         case #selector(showSplit(_:)): menuItem.state = mode == .split ? .on : .off
         case #selector(showPreviewOnly(_:)): menuItem.state = mode == .preview ? .on : .off
+        case #selector(toggleDocumentSidebar(_:)):
+            menuItem.title = isSidebarVisible ? L("menu.hideSidebar", "Hide Sidebar") : L("menu.showSidebar", "Show Sidebar")
+        case #selector(toggleSyncScroll(_:)): menuItem.state = Settings.shared.syncScroll ? .on : .off
+        case #selector(toggleFocusMode(_:)):
+            menuItem.state = Settings.shared.focusMode ? .on : .off
+            return mode != .preview
+        case #selector(toggleTypewriterMode(_:)):
+            menuItem.state = Settings.shared.typewriterMode ? .on : .off
+            return mode != .preview
         default: break
         }
         return true
@@ -351,45 +548,53 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
     // MARK: - Export
 
     private var exportBaseName: String {
-        markdownDocument?.displayName.map { ($0 as NSString).deletingPathExtension } ?? "Dokumentum"
+        markdownDocument?.displayName.map { ($0 as NSString).deletingPathExtension } ?? L("document.untitled", "Document")
+    }
+
+    func exportOptions() -> ExportOptions {
+        Settings.shared.exportOptions(title: exportBaseName, baseURL: markdownDocument?.baseDirectory)
     }
 
     @objc func exportPDF(_ sender: Any?) {
-        runExport(type: .pdf, ext: "pdf", write: writePDF(to:))
+        runExport(type: .pdf, ext: "pdf") { [self] url in try await writePDF(to: url) }
     }
 
     @objc func exportDOCX(_ sender: Any?) {
         let docxType = UTType("org.openxmlformats.wordprocessingml.document") ?? UTType(filenameExtension: "docx")!
-        runExport(type: docxType, ext: "docx", write: writeDOCX(to:))
+        runExport(type: docxType, ext: "docx") { [self] url in try writeDOCX(to: url) }
     }
 
     @objc func exportHTML(_ sender: Any?) {
-        runExport(type: .html, ext: "html", write: writeHTML(to:))
+        runExport(type: .html, ext: "html") { [self] url in try writeHTML(to: url) }
     }
 
-    func writePDF(to url: URL) throws {
-        try PDFExporter.writePDF(markdown: editor.string, title: exportBaseName,
-                                 baseURL: markdownDocument?.baseDirectory, to: url)
+    @objc func exportEPUB(_ sender: Any?) {
+        let epubType = UTType("org.idpf.epub-container") ?? UTType(filenameExtension: "epub")!
+        runExport(type: epubType, ext: "epub") { [self] url in try writeEPUB(to: url) }
+    }
+
+    func writePDF(to url: URL) async throws {
+        try await PDFExporter.writePDF(markdown: editor.string, options: exportOptions(), to: url)
     }
 
     func writeDOCX(to url: URL) throws {
         let base = markdownDocument?.baseDirectory
-        var writer = DocxWriter(title: exportBaseName) { src in ImageLoader.load(src, base: base) }
+        var writer = DocxWriter(title: exportBaseName) { LocalImage.load($0, base: base) }
         try writer.makeDocx(markdown: editor.string).write(to: url, options: .atomic)
     }
 
     func writeHTML(to url: URL) throws {
-        let base = markdownDocument?.baseDirectory
-        let body = HTMLRenderer.render(markdown: editor.string) { src in
-            // Embed local images so the exported page is self-contained
-            guard let image = ImageLoader.load(src, base: base) else { return src }
-            return "data:image/\(image.fileExtension);base64,\(image.data.base64EncodedString())"
-        }
-        let html = HTMLRenderer.page(body: body, title: exportBaseName, css: Stylesheets.preview)
-        try html.write(to: url, atomically: true, encoding: .utf8)
+        var options = exportOptions()
+        options.headHTML = WebAssets.headHTML(for: .standaloneHTML)
+        try PDFExporter.html(markdown: editor.string, options: options, forExport: false)
+            .write(to: url, atomically: true, encoding: .utf8)
     }
 
-    private func runExport(type: UTType, ext: String, write: @escaping (URL) throws -> Void) {
+    func writeEPUB(to url: URL) throws {
+        try EPUBWriter.makeEPUB(markdown: editor.string, options: exportOptions()).write(to: url, options: .atomic)
+    }
+
+    private func runExport(type: UTType, ext: String, write: @escaping (URL) async throws -> Void) {
         guard let window else { return }
         commitEditing()
         let panel = NSSavePanel()
@@ -398,17 +603,45 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         panel.isExtensionHidden = false
         panel.nameFieldStringValue = exportBaseName + "." + ext
         panel.directoryURL = markdownDocument?.baseDirectory
-        panel.message = "Exportálás \(ext.uppercased()) formátumba"
+        panel.message = LF("export.panelMessage", "Export as %@", ext.uppercased())
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
+            self.showMessage(L("export.inProgress", "Exporting…"))
+            Task { @MainActor in
+                do {
+                    try await write(url)
+                    self.showMessage(LF("export.done", "Exported: %@", url.lastPathComponent))
+                } catch {
+                    self.showMessage("")
+                    let alert = NSAlert(error: error)
+                    alert.messageText = L("export.failed", "Export failed")
+                    alert.informativeText = error.localizedDescription
+                    alert.beginSheetModal(for: window, completionHandler: nil)
+                }
+            }
+        }
+    }
+
+    // MARK: - Printing
+
+    /// Prints the rendered document (same output as the PDF export).
+    func printRendered() {
+        guard let window else { return }
+        commitEditing()
+        let options = exportOptions()
+        let markdown = editor.string
+        let title = exportBaseName
+        Task { @MainActor in
             do {
-                try write(url)
-                self.showMessage("Exportálva: \(url.lastPathComponent)")
+                let data = try await PDFExporter.pdfData(markdown: markdown, options: options)
+                guard let pdf = PDFDocument(data: data) else { return }
+                let info = NSPrintInfo.shared.copy() as! NSPrintInfo
+                info.topMargin = 0; info.bottomMargin = 0; info.leftMargin = 0; info.rightMargin = 0
+                guard let op = pdf.printOperation(for: info, scalingMode: .pageScaleToFit, autoRotate: true) else { return }
+                op.jobTitle = title
+                op.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
             } catch {
-                let alert = NSAlert(error: error)
-                alert.messageText = "Az exportálás nem sikerült"
-                alert.informativeText = error.localizedDescription
-                alert.beginSheetModal(for: window)
+                NSAlert(error: error).beginSheetModal(for: window, completionHandler: nil)
             }
         }
     }
@@ -416,6 +649,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
     // MARK: - Toolbar
 
     private enum ItemID {
+        static let sidebar = NSToolbarItem.Identifier("sidebar")
         static let mode = NSToolbarItem.Identifier("mode")
         static let bold = NSToolbarItem.Identifier("bold")
         static let italic = NSToolbarItem.Identifier("italic")
@@ -431,11 +665,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         static let image = NSToolbarItem.Identifier("image")
         static let table = NSToolbarItem.Identifier("table")
         static let rule = NSToolbarItem.Identifier("rule")
+        static let footnote = NSToolbarItem.Identifier("footnote")
+        static let math = NSToolbarItem.Identifier("math")
+        static let focus = NSToolbarItem.Identifier("focus")
         static let export = NSToolbarItem.Identifier("export")
     }
 
     private func buildToolbar() {
-        let toolbar = NSToolbar(identifier: "ZMarkDownerToolbar")
+        let toolbar = NSToolbar(identifier: "ZMarkDownerToolbar2")
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = true
@@ -444,64 +681,68 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [ItemID.heading, ItemID.bold, ItemID.italic, ItemID.strike, .space,
+        [ItemID.sidebar, ItemID.heading, ItemID.bold, ItemID.italic, ItemID.strike, .space,
          ItemID.bullet, ItemID.numbered, ItemID.task, ItemID.quote, .space,
          ItemID.code, ItemID.codeBlock, ItemID.link, ItemID.image, ItemID.table,
          .flexibleSpace, ItemID.mode, ItemID.export]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar) + [ItemID.rule, .flexibleSpace, .space]
+        toolbarDefaultItemIdentifiers(toolbar) + [ItemID.rule, ItemID.footnote, ItemID.math, ItemID.focus, .flexibleSpace, .space]
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        func button(_ label: String, _ symbol: String, _ action: Selector) -> NSToolbarItem {
+        func button(_ label: String, _ symbol: String, _ action: Selector, target: AnyObject? = nil) -> NSToolbarItem {
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = label
             item.paletteLabel = label
             item.toolTip = label
             item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
             item.action = action
-            item.target = nil
+            item.target = target
             item.isBordered = true
             return item
         }
 
         switch id {
-        case ItemID.bold: return button("Félkövér (⌘B)", "bold", #selector(EditorTextView.formatBold(_:)))
-        case ItemID.italic: return button("Dőlt (⌘I)", "italic", #selector(EditorTextView.formatItalic(_:)))
-        case ItemID.strike: return button("Áthúzott", "strikethrough", #selector(EditorTextView.formatStrikethrough(_:)))
-        case ItemID.bullet: return button("Felsorolás", "list.bullet", #selector(EditorTextView.formatBulletList(_:)))
-        case ItemID.numbered: return button("Számozott lista", "list.number", #selector(EditorTextView.formatNumberedList(_:)))
-        case ItemID.task: return button("Feladatlista", "checklist", #selector(EditorTextView.formatTaskList(_:)))
-        case ItemID.quote: return button("Idézet", "text.quote", #selector(EditorTextView.formatQuote(_:)))
-        case ItemID.code: return button("Kód", "chevron.left.forwardslash.chevron.right", #selector(EditorTextView.formatInlineCode(_:)))
-        case ItemID.codeBlock: return button("Kódblokk", "curlybraces.square", #selector(EditorTextView.insertCodeBlock(_:)))
-        case ItemID.link: return button("Link (⌘K)", "link", #selector(EditorTextView.insertLink(_:)))
-        case ItemID.image: return button("Kép", "photo", #selector(EditorTextView.insertImage(_:)))
-        case ItemID.table: return button("Táblázat", "tablecells", #selector(EditorTextView.insertTable(_:)))
-        case ItemID.rule: return button("Vízszintes vonal", "minus", #selector(EditorTextView.insertHorizontalRule(_:)))
+        case ItemID.sidebar: return button(L("toolbar.sidebar", "Sidebar"), "sidebar.left", #selector(toggleDocumentSidebar(_:)), target: self)
+        case ItemID.bold: return button(L("toolbar.bold", "Bold (⌘B)"), "bold", #selector(EditorTextView.formatBold(_:)))
+        case ItemID.italic: return button(L("toolbar.italic", "Italic (⌘I)"), "italic", #selector(EditorTextView.formatItalic(_:)))
+        case ItemID.strike: return button(L("toolbar.strike", "Strikethrough"), "strikethrough", #selector(EditorTextView.formatStrikethrough(_:)))
+        case ItemID.bullet: return button(L("toolbar.bullet", "Bulleted List"), "list.bullet", #selector(EditorTextView.formatBulletList(_:)))
+        case ItemID.numbered: return button(L("toolbar.numbered", "Numbered List"), "list.number", #selector(EditorTextView.formatNumberedList(_:)))
+        case ItemID.task: return button(L("toolbar.task", "Task List"), "checklist", #selector(EditorTextView.formatTaskList(_:)))
+        case ItemID.quote: return button(L("toolbar.quote", "Quote"), "text.quote", #selector(EditorTextView.formatQuote(_:)))
+        case ItemID.code: return button(L("toolbar.code", "Code"), "chevron.left.forwardslash.chevron.right", #selector(EditorTextView.formatInlineCode(_:)))
+        case ItemID.codeBlock: return button(L("toolbar.codeBlock", "Code Block"), "curlybraces.square", #selector(EditorTextView.insertCodeBlock(_:)))
+        case ItemID.link: return button(L("toolbar.link", "Link (⌘K)"), "link", #selector(EditorTextView.insertLink(_:)))
+        case ItemID.image: return button(L("toolbar.image", "Image"), "photo", #selector(EditorTextView.insertImage(_:)))
+        case ItemID.table: return button(L("toolbar.table", "Table"), "tablecells", #selector(EditorTextView.insertTable(_:)))
+        case ItemID.rule: return button(L("toolbar.rule", "Horizontal Rule"), "minus", #selector(EditorTextView.insertHorizontalRule(_:)))
+        case ItemID.footnote: return button(L("toolbar.footnote", "Footnote"), "text.append", #selector(EditorTextView.insertFootnote(_:)))
+        case ItemID.math: return button(L("toolbar.math", "Formula"), "function", #selector(EditorTextView.insertMathBlock(_:)))
+        case ItemID.focus: return button(L("toolbar.focus", "Focus Mode"), "scope", #selector(toggleFocusMode(_:)), target: self)
 
         case ItemID.heading:
             let item = NSMenuToolbarItem(itemIdentifier: id)
-            item.label = "Címsor"
-            item.paletteLabel = "Címsor"
-            item.toolTip = "Címsor"
-            item.image = NSImage(systemSymbolName: "textformat.size", accessibilityDescription: "Címsor")
+            item.label = L("toolbar.heading", "Heading")
+            item.paletteLabel = item.label
+            item.toolTip = item.label
+            item.image = NSImage(systemSymbolName: "textformat.size", accessibilityDescription: item.label)
             let menu = NSMenu()
-            menu.addItem(withTitle: "Normál szöveg", action: #selector(EditorTextView.formatParagraph(_:)), keyEquivalent: "")
+            menu.addItem(withTitle: L("menu.normalText", "Normal Text"), action: #selector(EditorTextView.formatParagraph(_:)), keyEquivalent: "")
             menu.addItem(.separator())
-            let headingActions: [Selector] = [
+            let actions: [Selector] = [
                 #selector(EditorTextView.formatHeading1(_:)), #selector(EditorTextView.formatHeading2(_:)),
                 #selector(EditorTextView.formatHeading3(_:)), #selector(EditorTextView.formatHeading4(_:)),
                 #selector(EditorTextView.formatHeading5(_:)), #selector(EditorTextView.formatHeading6(_:)),
             ]
-            for (i, action) in headingActions.enumerated() {
-                let mi = NSMenuItem(title: "Címsor \(i + 1)", action: action, keyEquivalent: "")
+            for (i, action) in actions.enumerated() {
+                let title = LF("menu.headingN", "Heading %d", i + 1)
+                let mi = NSMenuItem(title: title, action: action, keyEquivalent: "")
                 let size: CGFloat = [20, 17, 15, 13, 12, 11][i]
-                mi.attributedTitle = NSAttributedString(string: "Címsor \(i + 1)",
-                                                        attributes: [.font: NSFont.boldSystemFont(ofSize: size)])
+                mi.attributedTitle = NSAttributedString(string: title, attributes: [.font: NSFont.boldSystemFont(ofSize: size)])
                 menu.addItem(mi)
             }
             item.menu = menu
@@ -510,31 +751,34 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
 
         case ItemID.mode:
             let control = NSSegmentedControl(images: [
-                NSImage(systemSymbolName: "square.and.pencil", accessibilityDescription: "Szerkesztő")!,
-                NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: "Osztott nézet")!,
-                NSImage(systemSymbolName: "eye", accessibilityDescription: "Előnézet")!,
+                NSImage(systemSymbolName: "square.and.pencil", accessibilityDescription: L("view.editor", "Editor"))!,
+                NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: L("view.split", "Split View"))!,
+                NSImage(systemSymbolName: "eye", accessibilityDescription: L("view.preview", "Final View"))!,
             ], trackingMode: .selectOne, target: self, action: #selector(modeChanged(_:)))
-            control.setToolTip("Szerkesztő (⌘1)", forSegment: 0)
-            control.setToolTip("Osztott nézet (⌘2)", forSegment: 1)
-            control.setToolTip("Végleges nézet / előnézet (⌘3)", forSegment: 2)
+            control.setToolTip(L("view.editor", "Editor") + " (⌘1)", forSegment: 0)
+            control.setToolTip(L("view.split", "Split View") + " (⌘2)", forSegment: 1)
+            control.setToolTip(L("view.preview", "Final View") + " (⌘3)", forSegment: 2)
             control.selectedSegment = mode.rawValue
             modeControl = control
             let item = NSToolbarItem(itemIdentifier: id)
             item.view = control
-            item.label = "Nézet"
-            item.paletteLabel = "Nézet"
+            item.label = L("toolbar.view", "View")
+            item.paletteLabel = item.label
             return item
 
         case ItemID.export:
             let item = NSMenuToolbarItem(itemIdentifier: id)
-            item.label = "Exportálás"
-            item.paletteLabel = "Exportálás"
-            item.toolTip = "Exportálás PDF / DOCX / HTML formátumba"
-            item.image = NSImage(systemSymbolName: "square.and.arrow.up", accessibilityDescription: "Exportálás")
+            item.label = L("toolbar.export", "Export")
+            item.paletteLabel = item.label
+            item.toolTip = L("toolbar.exportTip", "Export as PDF, Word, HTML or EPUB")
+            item.image = NSImage(systemSymbolName: "square.and.arrow.up", accessibilityDescription: item.label)
             let menu = NSMenu()
-            menu.addItem(withTitle: "Exportálás PDF-be…", action: #selector(exportPDF(_:)), keyEquivalent: "")
-            menu.addItem(withTitle: "Exportálás Word (DOCX) formátumba…", action: #selector(exportDOCX(_:)), keyEquivalent: "")
-            menu.addItem(withTitle: "Exportálás HTML-be…", action: #selector(exportHTML(_:)), keyEquivalent: "")
+            menu.addItem(withTitle: L("menu.exportPDF", "Export as PDF…"), action: #selector(exportPDF(_:)), keyEquivalent: "")
+            menu.addItem(withTitle: L("menu.exportDOCX", "Export as Word (DOCX)…"), action: #selector(exportDOCX(_:)), keyEquivalent: "")
+            menu.addItem(withTitle: L("menu.exportHTML", "Export as HTML…"), action: #selector(exportHTML(_:)), keyEquivalent: "")
+            menu.addItem(withTitle: L("menu.exportEPUB", "Export as EPUB…"), action: #selector(exportEPUB(_:)), keyEquivalent: "")
+            menu.addItem(.separator())
+            menu.addItem(withTitle: L("menu.copyRich", "Copy as Formatted Text"), action: #selector(EditorTextView.copyAsRichText(_:)), keyEquivalent: "")
             item.menu = menu
             item.showsIndicator = true
             return item
@@ -548,32 +792,5 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     func windowWillClose(_ notification: Notification) {
         previewWork?.cancel()
-        highlightWork?.cancel()
-    }
-}
-
-/// Loads images referenced from Markdown for DOCX embedding.
-enum ImageLoader {
-    static func load(_ src: String, base: URL?) -> DocxImage? {
-        var url: URL?
-        if let u = URL(string: src), let scheme = u.scheme?.lowercased() {
-            guard scheme == "file" else { return nil } // remote images are not downloaded
-            url = u
-        } else if src.hasPrefix("/") {
-            url = URL(fileURLWithPath: src.removingPercentEncoding ?? src)
-        } else if let base {
-            url = base.appendingPathComponent(src.removingPercentEncoding ?? src)
-        }
-        guard let url, let data = try? Data(contentsOf: url),
-              let rep = NSBitmapImageRep(data: data) else { return nil }
-        let ext = url.pathExtension.lowercased()
-        // Use point size (96 dpi equivalents) so high-res images keep their intended size
-        let width = rep.size.width > 0 ? Int(rep.size.width * 96 / 72) : rep.pixelsWide
-        let height = rep.size.height > 0 ? Int(rep.size.height * 96 / 72) : rep.pixelsHigh
-        if ["png", "jpg", "jpeg", "gif"].contains(ext) {
-            return DocxImage(data: data, fileExtension: ext == "jpg" ? "jpeg" : ext, pixelWidth: width, pixelHeight: height)
-        }
-        guard let png = rep.representation(using: .png, properties: [:]) else { return nil }
-        return DocxImage(data: png, fileExtension: "png", pixelWidth: width, pixelHeight: height)
     }
 }
