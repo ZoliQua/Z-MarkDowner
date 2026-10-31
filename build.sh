@@ -31,6 +31,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APPEX/Contents/MacOS"
 cp "$BIN_DIR/ZMarkDowner" "$APP/Contents/MacOS/$APP_NAME"
 cp "$BIN_DIR/ZMarkDownerQuickLook" "$APPEX/Contents/MacOS/ZMarkDownerQuickLook"
+strip -x "$APP/Contents/MacOS/$APP_NAME" "$APPEX/Contents/MacOS/ZMarkDownerQuickLook"
 
 # Icon
 if [ ! -f "$BUILD_DIR/AppIcon.icns" ] || [ scripts/make_icon.swift -nt "$BUILD_DIR/AppIcon.icns" ]; then
