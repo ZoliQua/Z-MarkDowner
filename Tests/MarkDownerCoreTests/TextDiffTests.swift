@@ -22,6 +22,103 @@ final class TextDiffTests: XCTestCase {
         XCTAssertEqual(TextDiff.criticMarkup(r.segments), "The {--quick--}{++slow++} brown {--fox--}{++dog++}")
     }
 
+    /// Text, insertion and deletion contents of a parsed document (recursively).
+    private func inlineSummary(_ markdown: String) -> (texts: [String], insertions: [String], deletions: [String], blocks: [MDBlock]) {
+        let doc = MDDocument(markdown: markdown)
+        var texts: [String] = [], ins: [String] = [], del: [String] = []
+        func walk(_ inlines: [MDInline]) {
+            for i in inlines {
+                switch i {
+                case .text(let t): texts.append(t)
+                case .insertion(let c): ins.append(c.plainText); walk(c)
+                case .deletion(let c): del.append(c.plainText); walk(c)
+                case .emphasis(let c), .strong(let c), .strikethrough(let c), .highlight(let c): walk(c)
+                case .link(let c, _, _): walk(c)
+                default: break
+                }
+            }
+        }
+        func walk(_ blocks: [MDBlock]) {
+            for b in blocks {
+                switch b {
+                case .heading(_, let c, _), .paragraph(let c): walk(c)
+                case .blockquote(let bs): walk(bs)
+                case .list(let l): l.items.forEach { walk($0.blocks) }
+                case .table(let t): t.header.forEach(walk); t.rows.forEach { $0.forEach(walk) }
+                default: break
+                }
+            }
+        }
+        walk(doc.blocks)
+        return (texts, ins, del, doc.blocks)
+    }
+
+    private func assertNoLiteralMarks(_ texts: [String], _ markdown: String, file: StaticString = #filePath, line: UInt = #line) {
+        for t in texts {
+            for m in ["{++", "++}", "{--", "--}"] {
+                XCTAssertFalse(t.contains(m), "literal \(m) in \(t) — \(markdown)", file: file, line: line)
+            }
+        }
+    }
+
+    func testCriticMarkupInsertedParagraphAndList() {
+        let old = "First paragraph.\n\nLast paragraph."
+        let new = "First paragraph.\n\nA brand new paragraph here.\n\n- item one\n- item two\n\nLast paragraph."
+        let md = TextDiff.criticMarkup(TextDiff.compare(old, new).segments)
+        XCTAssertEqual(md, "First paragraph.\n\n{++A brand new paragraph here.++}\n\n- {++item one++}\n- {++item two++}\n\nLast paragraph.")
+        let s = inlineSummary(md)
+        assertNoLiteralMarks(s.texts, md)
+        XCTAssertEqual(s.insertions, ["A brand new paragraph here.", "item one", "item two"])
+        XCTAssertEqual(s.blocks.count, 4)
+        if case .list(let l) = s.blocks[2] { XCTAssertEqual(l.items.count, 2) } else { XCTFail("list expected: \(md)") }
+    }
+
+    func testCriticMarkupHeadingLevelChange() {
+        let md = TextDiff.criticMarkup(TextDiff.compare("# Old heading\n\nBody.", "## New heading\n\nBody.").segments)
+        XCTAssertEqual(md, "## {--Old--}{++New++} heading\n\nBody.")
+        let s = inlineSummary(md)
+        assertNoLiteralMarks(s.texts, md)
+        XCTAssertEqual(s.insertions, ["New"])
+        XCTAssertEqual(s.deletions, ["Old"])
+        if case .heading(let level, _, _) = s.blocks.first { XCTAssertEqual(level, 2) } else { XCTFail("heading expected: \(md)") }
+    }
+
+    func testCriticMarkupRemovedParagraphAndListItem() {
+        let old = "Intro.\n\nThis paragraph goes away.\n\n- keep\n- drop this\n\n> quoted old\n\nEnd."
+        let new = "Intro.\n\n- keep\n\n> quoted new\n\nEnd."
+        let md = TextDiff.criticMarkup(TextDiff.compare(old, new).segments)
+        let s = inlineSummary(md)
+        assertNoLiteralMarks(s.texts, md)
+        XCTAssertTrue(s.deletions.contains("This paragraph goes away."), md)
+        XCTAssertTrue(s.deletions.contains { $0.contains("drop this") }, md)
+        XCTAssertTrue(md.contains("> {--old--}{++new++}") || md.contains("> quoted {--old--}{++new++}"), md)
+        XCTAssertFalse(md.contains("{--\n") || md.contains("\n--}") || md.contains("{++\n") || md.contains("\n++}"), md)
+    }
+
+    func testCriticMarkupTableRowsAndStructuralLines() {
+        let old = "| A | B |\n|---|---|\n| 1 | 2 |\n\nText."
+        let new = "| A | B |\n|---|---|\n| 1 | 3 |\n| 4 | 5 |\n\n---\n\nText."
+        let md = TextDiff.criticMarkup(TextDiff.compare(old, new).segments)
+        let s = inlineSummary(md)
+        assertNoLiteralMarks(s.texts, md)
+        guard case .table(let t) = s.blocks.first else { return XCTFail("table expected: \(md)") }
+        XCTAssertEqual(t.rows.count, 2, md)
+        XCTAssertTrue(s.blocks.contains(.horizontalRule), md)
+        XCTAssertTrue(s.insertions.contains("4") && s.insertions.contains("5"), md)
+    }
+
+    func testCriticMarkupWordExportTracksParagraphChanges() throws {
+        let old = "# Old heading\n\nFirst paragraph.\n\nGone paragraph.\n\nLast paragraph."
+        let new = "## New heading\n\nFirst paragraph.\n\nA brand new paragraph here.\n\n- item one\n- item two\n\nLast paragraph."
+        let md = TextDiff.criticMarkup(TextDiff.compare(old, new).segments)
+        let data = try DocxExporter.data(markdown: md, options: ExportOptions(title: "T"))
+        let document = String(decoding: try ZipReader(data: data).contents(of: "word/document.xml")!, as: UTF8.self)
+        XCTAssertTrue(document.contains("<w:ins "), md)
+        XCTAssertTrue(document.contains("<w:del "), md)
+        XCTAssertFalse(document.contains("{++") || document.contains("{--") || document.contains("++}") || document.contains("--}"), md)
+        XCTAssertTrue(document.contains("item one") && document.contains("Gone"), md)
+    }
+
     func testRowsAlignInsertedLines() {
         let r = TextDiff.compare("a\nb\nc", "a\nX\nb\nc")
         XCTAssertEqual(r.rows.count, 4)

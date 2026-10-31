@@ -83,16 +83,150 @@ public enum TextDiff {
     }
 
     /// CriticMarkup rendering: deletions as `{--x--}` before insertions as `{++x++}`; nothing is escaped.
+    /// Marks never span a line break, and a line's block syntax (heading `#`, list marker, quote `>`,
+    /// table pipes, fences, rules) stays outside them, so the result parses as the same blocks as the
+    /// new text. When a line's block prefix changed, the new prefix is kept and only the text is marked.
     public static func criticMarkup(_ segments: [DiffSegment]) -> String {
-        var out = ""
+        var lines: [[DiffSegment]] = [[]]
+        var breaks: [String] = []
         for s in segments {
-            switch s.kind {
-            case .equal: out += s.text
-            case .delete: out += "{--\(s.text)--}"
-            case .insert: out += "{++\(s.text)++}"
+            var current = ""
+            for ch in s.text {
+                if ch == "\n" || ch == "\r\n" {
+                    if !current.isEmpty { lines[lines.count - 1].append(DiffSegment(kind: s.kind, text: current)) }
+                    current = ""
+                    breaks.append(String(ch))
+                    lines.append([])
+                } else {
+                    current.append(ch)
+                }
             }
+            if !current.isEmpty { lines[lines.count - 1].append(DiffSegment(kind: s.kind, text: current)) }
+        }
+        var out = ""
+        for (i, line) in lines.enumerated() {
+            out += markLine(line)
+            if i < breaks.count { out += breaks[i] }
         }
         return out
+    }
+
+    /// One line of the CriticMarkup output (pieces without line terminators).
+    private static func markLine(_ pieces: [DiffSegment]) -> String {
+        if pieces.allSatisfy({ $0.kind == .equal }) { return pieces.map(\.text).joined() }
+        let oldText = pieces.filter { $0.kind != .insert }.map(\.text).joined()
+        let newText = pieces.filter { $0.kind != .delete }.map(\.text).joined()
+        let newBlank = newText.allSatisfy(\.isWhitespace), oldBlank = oldText.allSatisfy(\.isWhitespace)
+        if newBlank && oldBlank { return newText }
+        let shown = newBlank ? oldText : newText
+        if isStructuralLine(shown) { return shown }
+        if shown.drop(while: { $0 == " " || $0 == "\t" }).first == "|" {
+            return pieces.map { s in
+                s.text.components(separatedBy: "|").map { mark(s.kind, $0, whitespaceOutside: true) }.joined(separator: "|")
+            }.joined()
+        }
+        let oldP = blockPrefix(oldText), newP = blockPrefix(newText)
+        let prefix: String
+        let body: [DiffSegment]
+        if newBlank {
+            prefix = oldP
+            body = dropCharacters(oldP.count, from: pieces.filter { $0.kind != .insert })
+        } else if oldBlank {
+            prefix = newP
+            body = dropCharacters(newP.count, from: pieces.filter { $0.kind != .delete })
+        } else if oldP == newP, pieces.prefix(while: { $0.kind == .equal }).map(\.text).joined().count >= newP.count {
+            prefix = newP
+            body = dropCharacters(newP.count, from: pieces)
+        } else {
+            prefix = newP
+            body = wordDiff(String(oldText.dropFirst(oldP.count)), String(newText.dropFirst(newP.count)), DiffOptions())
+        }
+        return prefix + body.map { mark($0.kind, $0.text, whitespaceOutside: false) }.joined()
+    }
+
+    private static func mark(_ kind: DiffKind, _ text: String, whitespaceOutside: Bool) -> String {
+        guard kind != .equal, !text.isEmpty else { return text }
+        var lead = "", core = text, trail = ""
+        if whitespaceOutside {
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { return text }
+            lead = String(text.prefix(while: { $0 == " " || $0 == "\t" }))
+            core = trimmed
+            trail = String(text.reversed().prefix(while: { $0 == " " || $0 == "\t" }).reversed())
+        }
+        return lead + (kind == .delete ? "{--\(core)--}" : "{++\(core)++}") + trail
+    }
+
+    /// Drops `count` characters from the start of a piece sequence.
+    private static func dropCharacters(_ count: Int, from pieces: [DiffSegment]) -> [DiffSegment] {
+        var remaining = count
+        var result: [DiffSegment] = []
+        for var s in pieces {
+            if remaining > 0 {
+                let n = min(remaining, s.text.count)
+                s.text = String(s.text.dropFirst(n))
+                remaining -= n
+            }
+            if !s.text.isEmpty { result.append(s) }
+        }
+        return result
+    }
+
+    /// Block syntax at the start of a line: indentation, quote markers, list markers (with a task box)
+    /// and a heading marker, e.g. `> - [ ] ` or `## `.
+    private static func blockPrefix(_ line: String) -> String {
+        let chars = Array(line)
+        var i = 0
+        func skipSpaces() { while i < chars.count, chars[i] == " " || chars[i] == "\t" { i += 1 } }
+        skipSpaces()
+        var end = i
+        while i < chars.count {
+            if chars[i] == ">" {
+                i += 1
+                if i < chars.count, chars[i] == " " { i += 1 }
+                end = i
+                skipSpaces()
+                continue
+            }
+            if "-*+".contains(chars[i]), i + 1 < chars.count, chars[i + 1] == " " || chars[i + 1] == "\t" {
+                i += 1
+                skipSpaces()
+                if i + 3 <= chars.count, chars[i] == "[", "xX ".contains(chars[i + 1]), chars[i + 2] == "]",
+                   i + 3 == chars.count || chars[i + 3] == " " {
+                    i += 3
+                    skipSpaces()
+                }
+                end = i
+                continue
+            }
+            var j = i
+            while j < chars.count, j - i < 9, chars[j].isASCII, chars[j].isNumber { j += 1 }
+            if j > i, j + 1 < chars.count, chars[j] == "." || chars[j] == ")", chars[j + 1] == " " || chars[j + 1] == "\t" {
+                i = j + 1
+                skipSpaces()
+                end = i
+                continue
+            }
+            break
+        }
+        i = end
+        var hashes = 0
+        while i + hashes < chars.count, chars[i + hashes] == "#" { hashes += 1 }
+        if (1...6).contains(hashes), i + hashes < chars.count, chars[i + hashes] == " " || chars[i + hashes] == "\t" {
+            i += hashes
+            skipSpaces()
+            end = i
+        }
+        return String(chars[0..<end])
+    }
+
+    /// Fences, horizontal rules and table delimiter rows: lines that only carry block structure.
+    private static func isStructuralLine(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("```") || t.hasPrefix("~~~") || t == "$$" { return true }
+        let rule = t.filter { $0 != " " && $0 != "\t" }
+        if rule.count >= 3, let first = rule.first, "-*_".contains(first), rule.allSatisfy({ $0 == first }) { return true }
+        return t.contains("-") && t.contains("|") && MarkdownParser.isTableDelimiterRow(t)
     }
 
     /// Splits into words (letters, digits, underscore), whitespace runs and single punctuation characters.
