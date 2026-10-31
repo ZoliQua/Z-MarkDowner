@@ -219,4 +219,12 @@ final class PDFImportTests: XCTestCase {
         _ = try DocumentImporter.markdown(fromFileAt: url)
         XCTAssertEqual(DocumentImporter.lastImportWarnings, [CoreStrings.pdfOCRPages(1)], "\(DocumentImporter.lastImportWarnings)")
     }
+
+    func testRecognitionLanguages() {
+        let supported = ["en-US", "de-DE", "hu-HU"]
+        let result = PDFOCR.recognitionLanguages(preferred: ["de-AT"], supported: supported)
+        XCTAssertEqual(Set(result), Set(supported))
+        XCTAssertEqual(result.count, 3)
+        XCTAssertEqual(PDFOCR.recognitionLanguages(preferred: ["de-AT"], supported: ["xx"]), ["xx"])
+    }
 }

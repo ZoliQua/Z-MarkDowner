@@ -12,7 +12,13 @@ public enum PDFOCR {
 
     /// The user's preferred languages that Vision can recognise, most preferred first; English when none match.
     public static var preferredLanguages: [String] {
-        filter(Locale.preferredLanguages, supported: supportedLanguages())
+        recognitionLanguages(preferred: Locale.preferredLanguages, supported: supportedLanguages())
+    }
+
+    /// The app language, then `preferred`, then English and Hungarian, each kept only when Vision
+    /// supports it (matched by language code, "hu" vs "hu-HU"), without duplicates.
+    static func recognitionLanguages(preferred: [String], supported: [String]) -> [String] {
+        filter([AppLanguage.current] + preferred + ["en", "hu"], supported: supported)
     }
 
     /// Recognises the text on `page` and returns it as lines in page coordinates (origin bottom left),
@@ -24,8 +30,7 @@ public enum PDFOCR {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
-        let usable = filter(languages, supported: supportedLanguages())
-        request.recognitionLanguages = usable
+        request.recognitionLanguages = filter(languages, supported: supportedLanguages())
         do {
             try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
         } catch {
