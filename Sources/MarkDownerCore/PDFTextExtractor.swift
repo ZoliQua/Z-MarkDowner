@@ -647,7 +647,7 @@ extension PDFTextExtractor {
     /// The CriticMarkup for one comment around the text it marks (`quote`, empty at an insertion point).
     static func reviewMark(for comment: ReviewComment, quote: String) -> String {
         let escaped = singleLine(comment.comment).replacingOccurrences(of: "<<}", with: "<< }")
-        let note = escaped.isEmpty ? "" : "{>>\(comment.author.isEmpty ? "" : comment.author + ": ")\(escaped)<<}"
+        let note = escaped.isEmpty ? "" : "{>>\(comment.author.isEmpty ? "" : singleLine(comment.author).replacingOccurrences(of: "<<}", with: "<< }") + ": ")\(escaped)<<}"
         guard !quote.isEmpty else { return note }
         var mark: String
         switch comment.kind {

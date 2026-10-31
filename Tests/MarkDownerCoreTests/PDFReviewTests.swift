@@ -140,12 +140,44 @@ final class PDFReviewTests: XCTestCase {
             ReviewComment(id: "b", page: 0, author: "R", kind: .highlight, quotedText: "bold", comment: "Bold one."),
         ]
         let marked = PDFTextExtractor.addingReviewMarks(from: comments, to: source)
-        let blocks = MarkdownParser.parseBlocks(marked)
-        let text = "\(blocks)"
-        XCTAssertTrue(text.contains("highlight"), text)
-        XCTAssertTrue(text.contains("comment(\"R: Bold one.\")") || text.contains("comment(\"R: One. Two.\")"), text)
+        var inlines: [MDInline] = []
+        func walk(_ nodes: [MDInline]) {
+            for node in nodes {
+                inlines.append(node)
+                switch node {
+                case .emphasis(let n), .strong(let n), .strikethrough(let n), .highlight(let n), .insertion(let n), .deletion(let n):
+                    walk(n)
+                case .link(let text, _, _): walk(text)
+                default: break
+                }
+            }
+        }
+        func walk(_ blocks: [MDBlock]) {
+            for block in blocks {
+                switch block {
+                case .heading(_, let content, _): walk(content)
+                case .paragraph(let content): walk(content)
+                case .blockquote(let inner): walk(inner)
+                case .list(let list): list.items.forEach { walk($0.blocks) }
+                default: break
+                }
+            }
+        }
+        walk(MarkdownParser.parseBlocks(marked))
+        let highlights = inlines.compactMap { node -> [MDInline]? in if case .highlight(let n) = node { return n }; return nil }
+        let notes = inlines.compactMap { node -> String? in if case .comment(let t) = node { return t }; return nil }
+        XCTAssertEqual(highlights, [[.text("bugs item")], [.strong([.text("bold words")])]], "\(highlights)")
+        XCTAssertEqual(notes, ["R: One. Two.", "R: Bold one."])
+        for case .text(let t) in inlines {
+            XCTAssertFalse(t.contains("{==") || t.contains("{>>") || t.contains("<<}") || t.contains("==}"), t)
+        }
         XCTAssertTrue(marked.contains("{==**bold words**==}"), marked)
         XCTAssertTrue(marked.contains("{==bugs item==}{>>R: One. Two.<<}\n- second"), marked)
+    }
+
+    func testAuthorWithNewlineStaysOneMark() {
+        let c = ReviewComment(id: "p0-0", page: 0, author: "A\nB", kind: .highlight, quotedText: "bugs", comment: "x")
+        XCTAssertEqual(PDFTextExtractor.reviewMark(for: c, quote: "bugs"), "{==bugs==}{>>A B: x<<}")
     }
 
     func testCaretInsertsAfterPrecedingWord() {
