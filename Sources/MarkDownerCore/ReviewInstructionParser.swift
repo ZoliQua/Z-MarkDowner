@@ -41,6 +41,69 @@ public enum ReviewInstructionParser {
         }
     }
 
+    // MARK: On-device model proposals
+
+    /// The edit an on-device model proposed for a comment, or nil when the proposal is unusable.
+    ///
+    /// `action` is `replace`, `insertAfter`, `insertBefore`, `delete` or `none`. The trimmed `target`
+    /// must occur in `sentence` exactly (case-sensitive), and the new text must be a real text: not
+    /// empty (except for a deletion), not equal to the target, without an ellipsis.
+    public static func validateAI(action: String, target: String, text: String, sentence: String) -> Suggestion? {
+        let kind = action.lowercased().filter { $0.isLetter }
+        let target = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard kind != "none", !target.isEmpty, sentence.contains(target) else { return nil }
+        if kind == "delete" { return .delete(target: target) }
+        guard !text.isEmpty, !text.contains("..."), !text.contains("…") else { return nil }
+        switch kind {
+        case "replace": return text == target ? nil : .replace(target: target, with: text)
+        case "insertafter": return .insertAfter(target: target, text: spacedAfter(text))
+        case "insertbefore": return .insertBefore(target: target, text: spacedBefore(text))
+        default: return nil
+        }
+    }
+
+    /// The sentence (or line) of `text` around `range`, at most `limit` characters, for a model prompt.
+    ///
+    /// The sentence ends at `.`, `!` or `?` followed by white space, and never runs over a line break.
+    /// When it is longer than `limit` it is cut to a window around `range` at word boundaries; a range
+    /// longer than `limit` is returned as it is.
+    public static func sentence(around range: NSRange, in text: String, limit: Int = 400) -> String {
+        let source = text as NSString
+        guard range.location != NSNotFound, NSMaxRange(range) <= source.length else { return "" }
+        let isNewline = { (unit: unichar) in unit == 0x0A || unit == 0x0D || unit == 0x2028 || unit == 0x2029 }
+        let isSpace = { (unit: unichar) in unit == 0x20 || unit == 0x09 || isNewline(unit) }
+        let isEnd = { (unit: unichar) in unit == 0x2E || unit == 0x21 || unit == 0x3F }
+        var start = range.location
+        while start > 0 {
+            let previous = source.character(at: start - 1)
+            if isNewline(previous) { break }
+            if start >= 2, isSpace(previous), isEnd(source.character(at: start - 2)) { break }
+            start -= 1
+        }
+        var end = NSMaxRange(range)
+        while end < source.length {
+            let unit = source.character(at: end)
+            if isNewline(unit) { break }
+            end += 1
+            if isEnd(unit), end == source.length || isSpace(source.character(at: end)) { break }
+        }
+        if end - start > limit && range.length < limit {
+            let spare = limit - range.length
+            var lo = max(start, range.location - spare / 2)
+            var hi = min(end, lo + limit)
+            lo = max(start, hi - limit)
+            if lo > start { while lo < range.location && !isSpace(source.character(at: lo - 1)) { lo += 1 } }
+            if hi < end { while hi > NSMaxRange(range) && !isSpace(source.character(at: hi)) { hi -= 1 } }
+            start = lo
+            end = hi
+        } else if end - start > limit {
+            start = range.location
+            end = NSMaxRange(range)
+        }
+        return source.substring(with: NSRange(location: start, length: end - start)).trimmingCharacters(in: .whitespaces)
+    }
+
     // MARK: Rules
 
     private static func instruction(quoted: String, comment: String, sentence: String) -> Suggestion? {

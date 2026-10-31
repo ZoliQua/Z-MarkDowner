@@ -32,6 +32,7 @@ final class Settings {
             "revisionMode": DocumentImporter.RevisionMode.markup.rawValue,
             "liveFormatting": false,
             "dailyWordGoal": 0,
+            "aiSuggestions": true,
         ])
         DocumentImporter.revisionMode = revisionMode
     }
@@ -204,6 +205,12 @@ final class Settings {
     var liveFormatting: Bool {
         get { defaults.bool(forKey: "liveFormatting") }
         set { defaults.set(newValue, forKey: "liveFormatting"); changed() }
+    }
+
+    /// Lets Apple Intelligence propose edits for review comments (only where the on-device model is available).
+    var aiSuggestions: Bool {
+        get { defaults.bool(forKey: "aiSuggestions") }
+        set { defaults.set(newValue, forKey: "aiSuggestions"); changed() }
     }
 
     /// Words to write per day (0 = no goal).

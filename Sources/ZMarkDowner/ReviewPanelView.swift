@@ -13,6 +13,11 @@ final class ReviewPanelView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     private let applyAllButton = NSButton()
     private let marksButton = NSButton()
     private let exportButton = NSButton()
+    private let aiAllButton = NSButton()
+    private let aiStatusLabel = NSTextField(labelWithString: "")
+    private let aiCancelButton = NSButton()
+    private let aiStatusRow = NSStackView()
+    private var aiTask: Task<Void, Never>?
     private let scroll = NSScrollView()
     private let table = NSTableView()
     private let emptyLabel = NSTextField(wrappingLabelWithString: "")
@@ -33,8 +38,11 @@ final class ReviewPanelView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     var columnWidth: CGFloat { table.tableColumns.first?.width ?? 0 }
 
     private enum Action: Int, CaseIterable {
-        case select, apply, done, reject, reopen, reply
+        case select, apply, done, reject, reopen, reply, suggestAI
     }
+
+    /// Whether the AI commands (Suggest Edit, Suggest Edits for All) are shown.
+    var showsAIControls: Bool { AISuggester.isEnabled }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -69,10 +77,22 @@ final class ReviewPanelView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         applyAllButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         configure(marksButton, L("review.insertMarks", "Insert as Review Marks"), "text.bubble", #selector(marksClicked))
         configure(exportButton, L("review.exportResponse", "Export Response to Reviewers…"), "square.and.arrow.up", #selector(exportClicked))
+        configure(aiAllButton, L("review.aiAll", "Suggest Edits for All (AI)"), "sparkles", #selector(aiAllClicked))
+        aiStatusLabel.font = .systemFont(ofSize: 11)
+        aiStatusLabel.textColor = .secondaryLabelColor
+        aiStatusLabel.lineBreakMode = .byTruncatingTail
+        aiStatusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        aiCancelButton.bezelStyle = .inline
+        aiCancelButton.controlSize = .small
+        aiCancelButton.title = L("button.cancel", "Cancel")
+        aiCancelButton.target = self
+        aiCancelButton.action = #selector(aiCancelClicked)
+        aiStatusRow.setViews([aiStatusLabel, aiCancelButton], in: .leading)
+        aiStatusRow.spacing = 6
 
         let filters = NSStackView(views: [filterPopup, authorPopup])
         filters.spacing = 6
-        let bulk = NSStackView(views: [applyAllButton, NSView(), marksButton, exportButton])
+        let bulk = NSStackView(views: [applyAllButton, NSView(), aiAllButton, marksButton, exportButton])
         bulk.spacing = 4
         topStack.orientation = .vertical
         topStack.alignment = .leading
@@ -80,7 +100,9 @@ final class ReviewPanelView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         topStack.addArrangedSubview(headerLabel)
         topStack.addArrangedSubview(filters)
         topStack.addArrangedSubview(bulk)
+        topStack.addArrangedSubview(aiStatusRow)
         bulk.widthAnchor.constraint(equalTo: topStack.widthAnchor).isActive = true
+        aiStatusRow.widthAnchor.constraint(lessThanOrEqualTo: topStack.widthAnchor).isActive = true
         headerLabel.widthAnchor.constraint(lessThanOrEqualTo: topStack.widthAnchor).isActive = true
         filters.widthAnchor.constraint(lessThanOrEqualTo: topStack.widthAnchor).isActive = true
 
@@ -111,6 +133,7 @@ final class ReviewPanelView: NSView, NSTableViewDataSource, NSTableViewDelegate,
             (.reject, L("review.action.reject", "Reject"), "xmark.circle"),
             (.reopen, L("review.action.reopen", "Reopen"), "arrow.uturn.backward.circle"),
             (.reply, L("review.action.reply", "Reply…"), "arrowshape.turn.up.left"),
+            (.suggestAI, L("review.action.suggestAI", "Suggest Edit (AI)"), "sparkles"),
         ]
         for (action, title, symbol) in titles {
             let button = NSButton()
@@ -152,6 +175,7 @@ final class ReviewPanelView: NSView, NSTableViewDataSource, NSTableViewDelegate,
             importButton.topAnchor.constraint(equalTo: emptyLabel.bottomAnchor, constant: 12),
             importButton.centerXAnchor.constraint(equalTo: centerXAnchor),
         ])
+        NotificationCenter.default.addObserver(self, selector: #selector(settingsChanged), name: Settings.didChange, object: nil)
         reload()
     }
 
@@ -209,6 +233,15 @@ final class ReviewPanelView: NSView, NSTableViewDataSource, NSTableViewDelegate,
             applyAllButton.isEnabled = !controller.applicableIDs.isEmpty
             marksButton.isHidden = !controller.canInsertMarks
         }
+        let ai = showsAIControls
+        aiAllButton.isHidden = !ai
+        aiAllButton.isEnabled = !(controller?.aiCandidateIDs.isEmpty ?? true)
+        let status = controller?.aiStatus ?? ""
+        aiStatusLabel.stringValue = status
+        aiStatusLabel.toolTip = status
+        aiCancelButton.isHidden = !(controller?.isSuggesting ?? false)
+        aiStatusRow.isHidden = !ai || (status.isEmpty && aiCancelButton.isHidden)
+        for (button, action) in actionButtons where action == .suggestAI { button.isHidden = !ai }
         heights = [:]
         table.reloadData()
         if let selectedID, let row = rows.firstIndex(where: { $0.id == selectedID }) {
@@ -243,6 +276,7 @@ final class ReviewPanelView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         case .reject: return comment.status != .rejected
         case .reopen: return comment.status != .open
         case .reply: return true
+        case .suggestAI: return controller?.canSuggestWithAI(comment) ?? false
         }
     }
 
@@ -290,7 +324,29 @@ final class ReviewPanelView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         case .reject: controller.setStatus(comment.id, .rejected)
         case .reopen: controller.setStatus(comment.id, .open)
         case .reply: askReply(for: comment)
+        case .suggestAI: startAI { await $0.suggestWithAI(comment.id) }
         }
+    }
+
+    /// Runs one AI pass in the background; the Cancel button in the status line stops it.
+    private func startAI(_ work: @escaping @MainActor (ReviewController) async -> Void) {
+        guard let controller, !controller.isSuggesting else { return }
+        aiTask = Task { @MainActor [weak self] in
+            await work(controller)
+            self?.aiTask = nil
+        }
+    }
+
+    @objc private func aiAllClicked() {
+        startAI { await $0.suggestAllWithAI() }
+    }
+
+    @objc private func aiCancelClicked() {
+        aiTask?.cancel()
+    }
+
+    @objc private func settingsChanged() {
+        reload()
     }
 
     private func askReply(for comment: ReviewComment) {
@@ -364,13 +420,14 @@ final class ReviewPanelView: NSView, NSTableViewDataSource, NSTableViewDelegate,
             (.reopen, L("review.action.reopen", "Reopen")),
             (.reply, L("review.action.reply", "Reply…")),
         ]
+            + (showsAIControls ? [(.suggestAI, L("review.action.suggestAI", "Suggest Edit (AI)"))] : [])
         for (action, title) in items {
             let item = NSMenuItem(title: title, action: isEnabled(action, for: comment) ? #selector(menuAction(_:)) : nil, keyEquivalent: "")
             item.target = self
             item.tag = action.rawValue
             item.representedObject = comment.id
             menu.addItem(item)
-            if action == .select || action == .reopen { menu.addItem(.separator()) }
+            if action == .select || action == .reopen || (action == .reply && showsAIControls) { menu.addItem(.separator()) }
         }
     }
 

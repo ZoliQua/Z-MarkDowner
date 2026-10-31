@@ -326,6 +326,116 @@ final class ReviewController {
         onChange?()
     }
 
+    // MARK: AI suggestions
+
+    /// The panel's status line for AI work: progress ("AI 3 / 40…") or the outcome of the last run.
+    private(set) var aiStatus = ""
+    private(set) var isSuggesting = false
+
+    /// Whether the on-device model may be asked about the comment: it is open, has a text and lies in the
+    /// source, and has no suggestion from the instruction parser (an earlier AI suggestion may be redone).
+    func canSuggestWithAI(_ comment: ReviewComment) -> Bool {
+        AISuggester.isEnabled && !isSuggesting && comment.status == .open && anchors[comment.id] != nil
+            && !comment.comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (comment.suggestion == nil || comment.suggestionIsAI)
+    }
+
+    /// The comments Suggest Edits for All works through: those without any suggestion yet.
+    var aiCandidateIDs: [String] {
+        session?.comments.filter { $0.suggestion == nil && canSuggestWithAI($0) }.map(\.id) ?? []
+    }
+
+    /// Asks the on-device model for an edit for one comment (also redoing an earlier AI suggestion).
+    @MainActor
+    func suggestWithAI(_ id: String) async {
+        guard let comment = comment(id), canSuggestWithAI(comment) else { return }
+        await runAI([id])
+    }
+
+    /// Asks the on-device model for an edit for every comment without a suggestion, one at a time;
+    /// stops early when the surrounding task is cancelled.
+    @MainActor
+    func suggestAllWithAI() async {
+        let ids = aiCandidateIDs
+        guard !ids.isEmpty else {
+            aiStatus = L("ai.nothing", "AI: no comments without a suggestion")
+            onChange?()
+            return
+        }
+        await runAI(ids)
+    }
+
+    private enum AIOutcome { case suggested, noEdit, outside, failed(String) }
+
+    @MainActor
+    private func runAI(_ ids: [String]) async {
+        isSuggesting = true
+        var suggested = 0, failures = 0, asked = 0
+        var lastOutcome = AIOutcome.noEdit
+        var lastError: String?
+        for (index, id) in ids.enumerated() {
+            if Task.isCancelled { break }
+            aiStatus = ids.count == 1 ? L("ai.working", "AI is reading the comment…") : LF("ai.progress", "AI %d / %d…", index + 1, ids.count)
+            onChange?()
+            lastOutcome = await suggestOne(id)
+            if Task.isCancelled { break }
+            asked += 1
+            switch lastOutcome {
+            case .suggested: suggested += 1
+            case .noEdit, .outside: break
+            case .failed(let message):
+                failures += 1
+                lastError = message
+            }
+            if case .failed = lastOutcome, !AISuggester.isAvailable { break }
+        }
+        isSuggesting = false
+        if Task.isCancelled {
+            aiStatus = LF("ai.cancelled", "AI stopped after %d of %d comments: %d suggestions", asked, ids.count, suggested)
+        } else if ids.count == 1 {
+            switch lastOutcome {
+            case .suggested: aiStatus = L("ai.done.one", "AI suggestion added")
+            case .noEdit: aiStatus = L("ai.noEdit", "AI proposed no edit for this comment")
+            case .outside: aiStatus = L("ai.outside", "AI proposed an edit outside the marked text; it was dropped")
+            case .failed(let message): aiStatus = LF("ai.failed", "AI: %@", message)
+            }
+        } else {
+            aiStatus = LF("ai.done", "AI: %d suggestions for %d comments", suggested, asked)
+            if let lastError { aiStatus += " · " + LF("ai.failures", "%d failed (%@)", failures, lastError) }
+        }
+        onChange?()
+    }
+
+    /// One model request for the comment against the sentence around its anchor. The proposal is kept only
+    /// when it can be applied at the anchor and the comment is unchanged meanwhile and still has no
+    /// suggestion from the instruction parser.
+    @MainActor
+    private func suggestOne(_ id: String) async -> AIOutcome {
+        refresh(for: id)
+        guard let session, let comment = comment(id), let file = anchorFiles[id], let range = anchors[id] else {
+            return .failed(L("review.unanchored", "Not found in the source"))
+        }
+        let text = currentText(of: file)
+        let sentence = ReviewInstructionParser.sentence(around: range, in: text)
+        let suggestion: Suggestion
+        do {
+            guard let proposed = try await AISuggester.suggest(for: comment, sentence: sentence) else { return .noEdit }
+            suggestion = proposed
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+        guard var current = self.comment(id), current.comment == comment.comment, current.quotedText == comment.quotedText,
+              current.suggestion == nil || current.suggestionIsAI else { return .noEdit }
+        refresh(for: id)
+        guard let anchor = anchors[id], let anchorFile = anchorFiles[id],
+              (try? ReviewSession.edit(applying: suggestion, at: anchor, in: currentText(of: anchorFile),
+                                       format: session.sourceFormat)) != nil else { return .outside }
+        current.suggestion = suggestion
+        current.suggestionIsAI = true
+        update(current)
+        return .suggested
+    }
+
     /// Writes every anchored comment into the Markdown text as review marks (one undoable edit).
     func insertMarks() {
         guard canInsertMarks, let session, let windowController else { return }

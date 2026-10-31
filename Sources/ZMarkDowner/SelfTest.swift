@@ -765,6 +765,7 @@ final class SelfTest {
         let sidebarWidth = wc.sidebar.frame.width
         check(wc.sidebar.reviewView.columnWidth > sidebarWidth - 50, "Review: comment rows span the sidebar (\(Int(wc.sidebar.reviewView.columnWidth)) of \(Int(sidebarWidth)))")
         await snapshot(window, name: "review-panel")
+        await aiSuggestions(review: review, panel: wc.sidebar.reviewView, window: window)
         func first(_ test: (Suggestion?) -> Bool) -> ReviewComment? { comments.first { test($0.suggestion) } }
         guard let replace = first({ if case .replace = $0 { return true }; return false }),
               let delete = first({ if case .delete = $0 { return true }; return false }),
@@ -859,6 +860,57 @@ final class SelfTest {
         doc.close()
 
         await latexReview(pdfURL: pdfURL, sentence: sentence, in: dir)
+    }
+
+    /// On-device AI proposals: a spelling comment yields a replacement with the British spelling, and a run
+    /// over all comments leaves the instruction parser's suggestions alone. Without the model the AI
+    /// commands are hidden.
+    private func aiSuggestions(review: ReviewController, panel: ReviewPanelView, window: NSWindow) async {
+        guard AISuggester.isAvailable else {
+            log.append("SKIP AI suggestions (model unavailable)")
+            check(!panel.showsAIControls, "Review: AI commands hidden without the on-device model")
+            return
+        }
+        let wasOn = Settings.shared.aiSuggestions
+        Settings.shared.aiSuggestions = true
+        check(panel.showsAIControls, "Review: AI commands shown when the on-device model is available")
+        let comment = ReviewComment(id: "ai-test", page: 0, kind: .highlight, quotedText: "color", comment: "Use the British spelling.")
+        do {
+            let started = Date()
+            let suggestion = try await AISuggester.suggest(for: comment, sentence: "The color scale is fixed.")
+            let seconds = String(format: "%.1f", Date().timeIntervalSince(started))
+            if case .replace(_, let with)? = suggestion {
+                check(with.contains("colour"), "Review AI: British spelling proposed as a replacement (\(String(describing: suggestion)), \(seconds) s)")
+            } else {
+                check(false, "Review AI: expected a replacement with “colour” (\(String(describing: suggestion)))")
+            }
+        } catch {
+            check(false, "Review AI: \(error.localizedDescription)")
+        }
+        let before = review.session?.comments ?? []
+        await review.suggestAllWithAI()
+        let after = review.session?.comments ?? []
+        let parsed = before.filter { $0.suggestion != nil }
+        check(!parsed.isEmpty && parsed.allSatisfy { old in after.first { $0.id == old.id }.map { $0.suggestion == old.suggestion && !$0.suggestionIsAI } ?? false },
+              "Review AI: suggestions from the comments' instructions are never replaced (\(review.aiStatus))")
+        check(!review.isSuggesting && !review.aiStatus.isEmpty, "Review AI: the run reports in the status line")
+        // A free-form remark on an anchored comment goes through the controller: sentence, validation, applicability
+        if let original = after.first(where: { $0.suggestion != nil && review.anchors[$0.id] != nil }) {
+            var remark = original
+            remark.comment = "This word is too strong; use “shortcomings” instead."
+            remark.suggestion = nil
+            review.update(remark)
+            await review.suggestWithAI(remark.id)
+            let result = review.comment(remark.id)
+            check(result?.suggestion == nil || result?.suggestionIsAI == true,
+                  "Review AI: a free-form remark gets an AI suggestion or none (\(result?.suggestion.map { String(describing: $0) } ?? "none"); \(review.aiStatus))")
+            await wait(0.3)
+            await snapshot(window, name: "review-panel-ai")
+            review.update(original)
+        }
+        Settings.shared.aiSuggestions = false
+        check(!panel.showsAIControls, "Review AI: the setting turns the AI commands off")
+        Settings.shared.aiSuggestions = wasOn
     }
 
     /// A LaTeX main file that pulls its text in with `\input`: suggestions are applied in the section

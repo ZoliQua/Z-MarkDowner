@@ -3,6 +3,20 @@
 "about.author" = "Author";
 "about.license" = "BSD 3-Clause License";
 "about.tagline" = "Native Markdown editor for macOS";
+"ai.cancelled" = "AI stopped after %d of %d comments: %d suggestions";
+"ai.done" = "AI: %d suggestions for %d comments";
+"ai.done.one" = "AI suggestion added";
+"ai.error.guardrail" = "Apple Intelligence declined to process this comment.";
+"ai.error.language" = "The on-device model does not support the language of this comment.";
+"ai.error.tooLong" = "The comment and its sentence are too long for the on-device model.";
+"ai.error.unavailable" = "Apple Intelligence is not available.";
+"ai.failed" = "AI: %@";
+"ai.failures" = "%d failed (%@)";
+"ai.noEdit" = "AI proposed no edit for this comment";
+"ai.nothing" = "AI: no comments without a suggestion";
+"ai.outside" = "AI proposed an edit outside the marked text; it was dropped";
+"ai.progress" = "AI %d / %d…";
+"ai.working" = "AI is reading the comment…";
 "batch.addFiles" = "Add Files…";
 "batch.addFolder" = "Add Folder…";
 "batch.chooseFolder" = "Choose Folder…";
@@ -239,6 +253,7 @@
 "placeholder.linkText" = "link text";
 "placeholder.start" = "Start";
 "placeholder.strike" = "struck text";
+"prefs.aiSuggestions" = "Use Apple Intelligence for review suggestions";
 "prefs.appearance" = "Appearance";
 "prefs.appearanceDark" = "Dark";
 "prefs.appearanceLight" = "Light";
@@ -273,6 +288,7 @@
 "prefs.restartNow" = "Restart Now";
 "prefs.restartText" = "Z-MarkDowner needs to restart to use the new language.";
 "prefs.restartTitle" = "Restart required";
+"prefs.review" = "Review";
 "prefs.revisions" = "Word changes & comments";
 "prefs.revisionsAccept" = "Accept all changes, drop comments";
 "prefs.revisionsMarkup" = "Keep as review marks";
@@ -300,6 +316,8 @@
 "review.action.reopen" = "Reopen";
 "review.action.reply" = "Reply…";
 "review.action.select" = "Select in Source";
+"review.action.suggestAI" = "Suggest Edit (AI)";
+"review.aiAll" = "Suggest Edits for All (AI)";
 "review.aiBadge" = "AI";
 "review.aiBadge.tip" = "Suggested by AI";
 "review.anonymous" = "Reviewer";

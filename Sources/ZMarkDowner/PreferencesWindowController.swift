@@ -274,6 +274,10 @@ final class WritingPane: FormPane {
         let goal = Settings.shared.dailyWordGoal
         goalField.stringValue = goal > 0 ? "\(goal)" : ""
         row(L("stats.dailyGoal", "Daily goal"), goalField)
+        if AISuggester.isAvailable {
+            row(L("prefs.review", "Review"), checkbox(L("prefs.aiSuggestions", "Use Apple Intelligence for review suggestions"),
+                                                      Settings.shared.aiSuggestions, action: #selector(aiChanged(_:))))
+        }
         updateLabels()
     }
 
@@ -310,6 +314,7 @@ final class WritingPane: FormPane {
     @objc private func revisionsChanged(_ sender: NSPopUpButton) {
         Settings.shared.revisionMode = DocumentImporter.RevisionMode.allCases[sender.indexOfSelectedItem]
     }
+    @objc private func aiChanged(_ sender: NSButton) { Settings.shared.aiSuggestions = sender.state == .on }
     @objc private func goalChanged(_ sender: NSTextField) {
         Settings.shared.dailyWordGoal = Int(sender.stringValue.filter(\.isNumber)) ?? 0
     }
