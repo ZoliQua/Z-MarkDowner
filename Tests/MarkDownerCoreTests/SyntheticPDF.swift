@@ -58,6 +58,33 @@ enum SyntheticPDF {
         return document
     }
 
+    /// A one-page PDF whose lines are drawn word by word at computed positions, with `gap` points between
+    /// words and no space characters in the text stream (as pdfTeX does for justified text).
+    static func makeSpaceless(lines: [[String]], gap: CGFloat = 4, fontSize: CGFloat = 11) -> PDFDocument {
+        let data = NSMutableData()
+        var mediaBox = CGRect(origin: .zero, size: pageSize)
+        guard let consumer = CGDataConsumer(data: data as CFMutableData),
+              let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+            fatalError("Cannot create PDF context")
+        }
+        context.beginPDFPage(nil)
+        let font = CTFontCreateWithName("Helvetica" as CFString, fontSize, nil)
+        for (index, words) in lines.enumerated() {
+            let y = pageSize.height - 72 - CGFloat(index + 1) * fontSize * 1.25
+            var x: CGFloat = 72
+            for word in words {
+                let line = CTLineCreateWithAttributedString(NSAttributedString(string: word, attributes: [.font: font]))
+                context.textPosition = CGPoint(x: x, y: y)
+                CTLineDraw(line, context)
+                x += CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) + gap
+            }
+        }
+        context.endPDFPage()
+        context.closePDF()
+        guard let document = PDFDocument(data: data as Data) else { fatalError("Cannot read synthetic PDF") }
+        return document
+    }
+
     private static func draw(_ text: String, size: CGFloat, bold: Bool, x: CGFloat, y: CGFloat, in context: CGContext) {
         let font = CTFontCreateWithName((bold ? "Helvetica-Bold" : "Helvetica") as CFString, size, nil)
         let attributed = NSAttributedString(string: text, attributes: [.font: font])
@@ -133,8 +160,8 @@ enum SyntheticPDF {
     ///
     /// `text` is drawn in 11 pt Helvetica at (72, 700); each entry of `annotations` is an annotation
     /// dictionary and becomes object 6, 7, … in order, so they can refer to each other.
-    static func makeRaw(text: String, annotations: [String]) -> PDFDocument {
-        let stream = "BT /F1 11 Tf 72 700 Td (\(text)) Tj ET"
+    static func makeRaw(text: String, annotations: [String], stream: String? = nil) -> PDFDocument {
+        let stream = stream ?? "BT /F1 11 Tf 72 700 Td (\(text)) Tj ET"
         let annots = annotations.indices.map { "\($0 + 6) 0 R" }.joined(separator: " ")
         let objects = [
             "<< /Type /Catalog /Pages 2 0 R >>",

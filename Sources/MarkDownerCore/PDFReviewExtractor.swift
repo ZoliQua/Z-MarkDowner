@@ -254,8 +254,7 @@ public enum PDFReviewExtractor {
             let band = CGRect(x: rect.minX + inset, y: rect.midY - rect.height * 0.2,
                               width: rect.width - 2 * inset, height: rect.height * 0.4)
             let snapped = wordRange(under: rect, on: page)
-            var text = snapped.map { clean((page.string as NSString?)?.substring(with: $0.range)) }
-                ?? clean(page.selection(for: band)?.string)
+            var text = snapped.map { clean($0.text) } ?? clean(page.selection(for: band)?.string)
             guard let index = lineIndex(for: rect, in: lines) else {
                 if !text.isEmpty { pieces.append(Piece(text: text)) }
                 continue
@@ -285,8 +284,9 @@ public enum PDFReviewExtractor {
     /// spaces or gaps wider than a fifth of the line height. A word at either end counts when at least half
     /// of its letters are under the quad, and is then taken whole, so quads that stop short of a word's
     /// end or reach into the next word still quote whole words. A number standing more than a line height
-    /// apart at either end (a `lineno` number) is left out. `minX` is the left edge of the first glyph.
-    private static func wordRange(under rect: CGRect, on page: PDFPage) -> (range: NSRange, minX: CGFloat)? {
+    /// apart at either end (a `lineno` number) is left out. `minX` is the left edge of the first glyph, and
+    /// `text` the words joined by `joinWords`.
+    private static func wordRange(under rect: CGRect, on page: PDFPage) -> (range: NSRange, minX: CGFloat, text: String)? {
         guard let string = page.string as NSString?, string.length > 0, rect.height > 0 else { return nil }
         let em = rect.height
         let search = CGRect(x: rect.minX - em, y: rect.midY - em * 0.2, width: rect.width + 2 * em, height: em * 0.4)
@@ -361,7 +361,36 @@ public enum PDFReviewExtractor {
             selected.removeFirst()
         }
         guard let first = selected.first, let last = selected.last, let firstBox = box(first.lowerBound) else { return nil }
-        return (NSRange(location: first.lowerBound, length: last.upperBound - first.lowerBound + 1), firstBox.minX)
+        var glyphWords: [GlyphWord] = []
+        for (n, word) in selected.enumerated() {
+            let spaceBefore = n > 0 && (selected[n - 1].upperBound + 1..<word.lowerBound).contains(where: isSpace)
+            glyphWords.append(GlyphWord(text: string.substring(with: NSRange(location: word.lowerBound, length: word.count)),
+                                        minX: box(word.lowerBound)?.minX ?? 0, maxX: box(word.upperBound)?.maxX ?? 0,
+                                        spaceBefore: spaceBefore))
+        }
+        return (NSRange(location: first.lowerBound, length: last.upperBound - first.lowerBound + 1), firstBox.minX,
+                joinWords(glyphWords, em: em))
+    }
+
+    /// A run of glyphs on one line without spaces or wide gaps, with its horizontal extent.
+    struct GlyphWord {
+        var text: String
+        var minX: CGFloat
+        var maxX: CGFloat
+        /// Whether the page string has whitespace between this word and the previous one.
+        var spaceBefore: Bool
+    }
+
+    /// Joins the words of one line, putting a single space wherever the page string has whitespace or the
+    /// glyphs stand at least a fifth of `em` apart. pdfTeX's justified text can reach PDFKit without space
+    /// characters, so the gap alone must be enough to separate words.
+    static func joinWords(_ words: [GlyphWord], em: CGFloat) -> String {
+        var out = ""
+        for (n, word) in words.enumerated() {
+            if n > 0, word.spaceBefore || word.minX - words[n - 1].maxX >= em * 0.2 { out += " " }
+            out += word.text
+        }
+        return out
     }
 
     /// Context around a caret: the text before and after its horizontal centre on the line it marks.

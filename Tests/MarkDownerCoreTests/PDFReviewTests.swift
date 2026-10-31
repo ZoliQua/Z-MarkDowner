@@ -188,6 +188,38 @@ final class PDFReviewTests: XCTestCase {
         }, line: "interpretations of negative controls", lineNumbers: true), "controls")
     }
 
+    func testQuoteKeepsSpacesBetweenSpacelessWords() {
+        let doc = SyntheticPDF.makeSpaceless(lines: [["We", "present", "alpha", "beta", "gamma", "today"],
+                                                     ["and", "delta", "epsilon", "here."]])
+        let page = doc.page(at: 0)!
+        let quad = SyntheticPDF.bounds(of: "alpha", in: doc).union(SyntheticPDF.bounds(of: "gamma", in: doc))
+        page.addAnnotation(SyntheticPDF.markup(.highlight, over: [quad], contents: "x"))
+        let twoLines = [SyntheticPDF.bounds(of: "today", in: doc), SyntheticPDF.bounds(of: "delta", in: doc)]
+        page.addAnnotation(SyntheticPDF.markup(.underline, over: twoLines, contents: "y"))
+
+        let comments = PDFReviewExtractor.comments(from: SyntheticPDF.reloaded(doc))
+        XCTAssertEqual(comments.map(\.quotedText), ["alpha beta gamma", "today delta"])
+        guard let first = comments.first else { return }
+        XCTAssertEqual(first.contextBefore, "We present ")
+        XCTAssertEqual(first.contextAfter, " today and delta epsilon here.")
+    }
+
+    func testWordsJoinWithSpacesAtBugsEvenWithoutSpaceCharacters() {
+        // pdfTeX's justified text can come back from PDFKit without space characters between words; the
+        // glyph bugs still separate them.
+        typealias Word = PDFReviewExtractor.GlyphWord
+        let words = [Word(text: "alpha", minX: 72, maxX: 98, spaceBefore: false),
+                     Word(text: "beta", minX: 101, maxX: 122, spaceBefore: false),
+                     Word(text: "gamma", minX: 125, maxX: 158, spaceBefore: false)]
+        XCTAssertEqual(PDFReviewExtractor.joinWords(words, em: 11), "alpha beta gamma")
+        // A split without a gap (a glyph PDFKit gives no box) is not a word boundary.
+        let split = [Word(text: "visual", minX: 72, maxX: 100, spaceBefore: false),
+                     Word(text: "isation", minX: 100.2, maxX: 130, spaceBefore: false)]
+        XCTAssertEqual(PDFReviewExtractor.joinWords(split, em: 11), "visualisation")
+        let spaced = [Word(text: "a", minX: 72, maxX: 78, spaceBefore: false), Word(text: "b", minX: 78.5, maxX: 84, spaceBefore: true)]
+        XCTAssertEqual(PDFReviewExtractor.joinWords(spaced, em: 11), "a b")
+    }
+
     // MARK: Instructions
 
     func testInstructionPatterns() {
