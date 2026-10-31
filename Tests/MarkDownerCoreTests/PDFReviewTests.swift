@@ -212,12 +212,38 @@ final class PDFReviewTests: XCTestCase {
                      Word(text: "beta", minX: 101, maxX: 122, spaceBefore: false),
                      Word(text: "gamma", minX: 125, maxX: 158, spaceBefore: false)]
         XCTAssertEqual(PDFReviewExtractor.joinWords(words, em: 11), "alpha beta gamma")
-        // A split without a gap (a glyph PDFKit gives no box) is not a word boundary.
+        // A gap under a fifth of the line height (0.2 pt with an 11 pt line) is not a word boundary.
         let split = [Word(text: "visual", minX: 72, maxX: 100, spaceBefore: false),
                      Word(text: "isation", minX: 100.2, maxX: 130, spaceBefore: false)]
         XCTAssertEqual(PDFReviewExtractor.joinWords(split, em: 11), "visualisation")
         let spaced = [Word(text: "a", minX: 72, maxX: 78, spaceBefore: false), Word(text: "b", minX: 78.5, maxX: 84, spaceBefore: true)]
         XCTAssertEqual(PDFReviewExtractor.joinWords(spaced, em: 11), "a b")
+    }
+
+    func testGlyphWithoutBoxNeverAddsASpace() {
+        // An edge glyph PDFKit gives no box has no position, so there is no gap to measure: only whitespace
+        // in the page string separates the words. A 0 stand-in would read as a gap of the full x-position.
+        typealias Word = PDFReviewExtractor.GlyphWord
+        let noLeftEdge = [Word(text: "visual", minX: 72, maxX: nil, spaceBefore: false),
+                          Word(text: "isation", minX: 104, maxX: 130, spaceBefore: false)]
+        XCTAssertEqual(PDFReviewExtractor.joinWords(noLeftEdge, em: 11), "visualisation")
+        let noRightEdge = [Word(text: "visual", minX: 72, maxX: 100, spaceBefore: false),
+                           Word(text: "isation", minX: nil, maxX: 130, spaceBefore: false)]
+        XCTAssertEqual(PDFReviewExtractor.joinWords(noRightEdge, em: 11), "visualisation")
+        let spaced = [Word(text: "a", minX: 72, maxX: nil, spaceBefore: false),
+                      Word(text: "b", minX: nil, maxX: 84, spaceBefore: true)]
+        XCTAssertEqual(PDFReviewExtractor.joinWords(spaced, em: 11), "a b")
+    }
+
+    func testGlyphWithoutBoxStaysInsideItsWord() {
+        // "vis?al": the "?" has no box. It neither splits the word nor is dropped from it; a real gap still splits.
+        func glyph(_ x: CGFloat?) -> (isSpace: Bool, box: CGRect?) {
+            (false, x.map { CGRect(x: $0, y: 700, width: 5, height: 10) })
+        }
+        let glyphs = [glyph(72), glyph(77), glyph(82), glyph(nil), glyph(92), glyph(97), // "vis?al"
+                      glyph(110), glyph(115),                                           // gap of 8 pt: "be"
+                      (isSpace: true, box: nil), glyph(nil), glyph(130)]                // " ?x"
+        XCTAssertEqual(PDFReviewExtractor.splitWords(glyphs, em: 10), [0...5, 6...7, 9...10])
     }
 
     // MARK: Instructions

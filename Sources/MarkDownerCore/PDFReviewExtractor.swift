@@ -280,8 +280,7 @@ public enum PDFReviewExtractor {
 
     /// The page-string range of the whole words under one line's quad.
     ///
-    /// A character is under the quad when the centre of its glyph is. Words are runs of glyphs without
-    /// spaces or gaps wider than a fifth of the line height. A word at either end counts when at least half
+    /// A character is under the quad when the centre of its glyph is. Words come from `splitWords`. A word at either end counts when at least half
     /// of its letters are under the quad, and is then taken whole, so quads that stop short of a word's
     /// end or reach into the next word still quote whole words. A number standing more than a line height
     /// apart at either end (a `lineno` number) is left out. `minX` is the left edge of the first glyph, and
@@ -308,27 +307,15 @@ public enum PDFReviewExtractor {
         }
         func adjacent(_ a: Int, _ b: Int) -> Bool {
             guard !isSpace(a), !isSpace(b), let x = box(a), let y = box(b) else { return false }
-            return y.minX - x.maxX <= em * 0.2 && x.minX - y.maxX <= em * 0.2 && abs(x.midY - y.midY) < em / 2
+            return glyphsAdjacent(x, y, em: em)
         }
         var steps = 0
         while lower > 0, steps < 60, adjacent(lower - 1, lower) { lower -= 1; steps += 1 }
         steps = 0
         while upper < string.length, steps < 60, adjacent(upper - 1, upper) { upper += 1; steps += 1 }
 
-        var words: [ClosedRange<Int>] = []
-        var start: Int?
-        for i in lower..<upper {
-            if isSpace(i) || box(i) == nil {
-                if let s = start { words.append(s...(i - 1)) }
-                start = nil
-            } else if let s = start, !adjacent(i - 1, i) {
-                words.append(s...(i - 1))
-                start = i
-            } else if start == nil {
-                start = i
-            }
-        }
-        if let s = start { words.append(s...(upper - 1)) }
+        let words = splitWords((lower..<upper).map { (isSpace($0), box($0)) }, em: em)
+            .map { (lower + $0.lowerBound)...(lower + $0.upperBound) }
 
         func isAlphanumeric(_ i: Int) -> Bool {
             UnicodeScalar(string.character(at: i)).map { CharacterSet.alphanumerics.contains($0) } ?? false
@@ -337,9 +324,11 @@ public enum PDFReviewExtractor {
             guard let b = box(i) else { return false }
             return rect.contains(CGPoint(x: b.midX, y: b.midY))
         }
+        // Only glyphs with a box can be under the quad, so only they are counted.
         func share(_ word: ClosedRange<Int>) -> (under: Int, total: Int) {
-            let letters = word.filter(isAlphanumeric)
-            let counted = letters.isEmpty ? Array(word) : letters
+            let boxed = word.filter { box($0) != nil }
+            let letters = boxed.filter(isAlphanumeric)
+            let counted = letters.isEmpty ? boxed : letters
             return (counted.filter(isUnder).count, counted.count)
         }
         var selected = words.filter { let s = share($0); return s.under > 0 && s.under * 2 >= s.total }
@@ -350,7 +339,7 @@ public enum PDFReviewExtractor {
             word.allSatisfy { (0x30...0x39).contains(string.character(at: $0)) }
         }
         func gap(_ a: ClosedRange<Int>, _ b: ClosedRange<Int>) -> CGFloat {
-            guard let x = box(a.upperBound), let y = box(b.lowerBound) else { return 0 }
+            guard let x = a.reversed().lazy.compactMap(box).first, let y = b.lazy.compactMap(box).first else { return 0 }
             return y.minX - x.maxX
         }
         while selected.count > 1, isNumber(selected[selected.count - 1]),
@@ -360,34 +349,73 @@ public enum PDFReviewExtractor {
         while selected.count > 1, isNumber(selected[0]), gap(selected[0], selected[1]) > em {
             selected.removeFirst()
         }
-        guard let first = selected.first, let last = selected.last, let firstBox = box(first.lowerBound) else { return nil }
+        guard let first = selected.first, let last = selected.last,
+              let firstBox = first.lazy.compactMap(box).first else { return nil }
         var glyphWords: [GlyphWord] = []
         for (n, word) in selected.enumerated() {
             let spaceBefore = n > 0 && (selected[n - 1].upperBound + 1..<word.lowerBound).contains(where: isSpace)
             glyphWords.append(GlyphWord(text: string.substring(with: NSRange(location: word.lowerBound, length: word.count)),
-                                        minX: box(word.lowerBound)?.minX ?? 0, maxX: box(word.upperBound)?.maxX ?? 0,
+                                        minX: box(word.lowerBound)?.minX, maxX: box(word.upperBound)?.maxX,
                                         spaceBefore: spaceBefore))
         }
         return (NSRange(location: first.lowerBound, length: last.upperBound - first.lowerBound + 1), firstBox.minX,
                 joinWords(glyphWords, em: em))
     }
 
-    /// A run of glyphs on one line without spaces or wide gaps, with its horizontal extent.
+    /// Whether two glyph boxes on one line belong to the same word: they stand within a fifth of the line
+    /// height (`em`, the quad's height, not the font's em) of each other and on the same baseline.
+    static func glyphsAdjacent(_ x: CGRect, _ y: CGRect, em: CGFloat) -> Bool {
+        y.minX - x.maxX <= em * 0.2 && x.minX - y.maxX <= em * 0.2 && abs(x.midY - y.midY) < em / 2
+    }
+
+    /// Splits a run of characters into words, as index ranges into `glyphs`. Whitespace ends a word, and so
+    /// does a gap between two neighbouring boxed glyphs that are not `glyphsAdjacent`. A glyph PDFKit gives
+    /// no box has no position, so there is no gap to measure on either side of it: it stays in the word it
+    /// falls in and does not split it.
+    static func splitWords(_ glyphs: [(isSpace: Bool, box: CGRect?)], em: CGFloat) -> [ClosedRange<Int>] {
+        var words: [ClosedRange<Int>] = []
+        var start: Int?
+        var previousBox: CGRect?
+        for (i, glyph) in glyphs.enumerated() {
+            if glyph.isSpace {
+                if let s = start { words.append(s...(i - 1)) }
+                start = nil
+                previousBox = nil
+                continue
+            }
+            if let s = start, let previous = previousBox, let current = glyph.box, !glyphsAdjacent(previous, current, em: em) {
+                words.append(s...(i - 1))
+                start = i
+            } else if start == nil {
+                start = i
+            }
+            previousBox = glyph.box
+        }
+        if let s = start { words.append(s...(glyphs.count - 1)) }
+        return words
+    }
+
+    /// A run of glyphs on one line without spaces or wide gaps, with its horizontal extent. `minX` and
+    /// `maxX` are nil when the glyph at that end has no box.
     struct GlyphWord {
         var text: String
-        var minX: CGFloat
-        var maxX: CGFloat
+        var minX: CGFloat?
+        var maxX: CGFloat?
         /// Whether the page string has whitespace between this word and the previous one.
         var spaceBefore: Bool
     }
 
     /// Joins the words of one line, putting a single space wherever the page string has whitespace or the
-    /// glyphs stand at least a fifth of `em` apart. pdfTeX's justified text can reach PDFKit without space
-    /// characters, so the gap alone must be enough to separate words.
+    /// glyphs stand at least a fifth of `em` apart, where `em` is the line height (the quad's height), not
+    /// the font's em. pdfTeX's justified text can reach PDFKit without space characters, so the gap alone
+    /// must be enough to separate words. When either facing glyph has no box there is no gap to measure,
+    /// and only whitespace in the page string adds a space.
     static func joinWords(_ words: [GlyphWord], em: CGFloat) -> String {
         var out = ""
         for (n, word) in words.enumerated() {
-            if n > 0, word.spaceBefore || word.minX - words[n - 1].maxX >= em * 0.2 { out += " " }
+            var space = word.spaceBefore
+            if n > 0, !space, let left = words[n - 1].maxX, let right = word.minX { space = right - left >= em * 0.2 }
+            if n > 0, space { out += " " }
             out += word.text
         }
         return out
