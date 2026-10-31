@@ -23,6 +23,11 @@ final class MarkdownDocument: NSDocument {
     /// The Markdown source. The editor keeps it up to date.
     var text: String = ""
 
+    /// Text as last opened or explicitly saved (autosaves do not count), for Compare With ▸ Last Saved Version.
+    private(set) var savedText: String?
+    /// When `savedText` was saved; `nil` when it is the text the document was opened with.
+    private(set) var savedDate: Date?
+
     /// Name of the original file when the document was imported from another format.
     private(set) var importedFrom: URL?
 
@@ -96,7 +101,23 @@ final class MarkdownDocument: NSDocument {
             showPendingImportWarnings()
             sourceFormat = typeName == DocumentTypes.plainText ? .plain : .markdown
         }
+        savedText = text
+        savedDate = nil
         windowController?.documentTextDidChangeExternally()
+    }
+
+    override func save(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType,
+                       completionHandler: @escaping (Error?) -> Void) {
+        windowController?.commitEditing()
+        let snapshot = text
+        let explicit = [.saveOperation, .saveAsOperation, .saveToOperation].contains(saveOperation)
+        super.save(to: url, ofType: typeName, for: saveOperation) { [weak self] error in
+            if error == nil, explicit, let self {
+                self.savedText = snapshot
+                self.savedDate = Date()
+            }
+            completionHandler(error)
+        }
     }
 
     override func data(ofType typeName: String) throws -> Data {

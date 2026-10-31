@@ -41,7 +41,9 @@
 "compare.chooseVersion" = "Compare with an earlier version";
 "compare.clipboard" = "Clipboard";
 "compare.compare" = "Compare";
+"compare.lastSavedAt" = "Last Saved (%@)";
 "compare.noVersions" = "No earlier versions of this document are available.";
+"compare.openedVersion" = "Opened Version";
 "compare.saved" = "%@ (saved)";
 "diff.comparing" = "Comparing…";
 "diff.copySummary" = "Copy Summary";

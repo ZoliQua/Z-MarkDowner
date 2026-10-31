@@ -707,6 +707,8 @@ final class SelfTest {
             wc.compareWithSaved(nil)
             if let diff = DiffWindowController.openControllers.last {
                 _ = await waitFor(5) { diff.result != nil }
+                check(diff.oldTitle.contains("Last Saved") && (diff.result?.insertedWords ?? 0) > 0,
+                      "LaTeX: compares with the last explicitly saved text (\(diff.oldTitle))")
                 check(!diff.allowsReviewMarks && diff.result != nil,
                       "LaTeX: compare with saved works (\(diff.result?.insertedWords ?? -1) words inserted), Open as Review Marks disabled (\(diff.allowsReviewMarks))")
                 diff.close()
@@ -1034,13 +1036,13 @@ final class SelfTest {
             : diff.inlineTextView.textStorage?.attribute(.strikethroughStyle, at: quick.location, effectiveRange: nil) as? Int
         check(strike == NSUnderlineStyle.single.rawValue && diff.inlineTextView.enclosingScrollView?.isHidden == false,
               "Diff: inline view strikes through \"quick\"")
-        let reviewDoc = diff.openAsReviewMarks()
+        let reviewDoc = await diff.openAsReviewMarks()
         check(reviewDoc.text == "The {--quick--}{++slow++} brown {--fox--}{++dog++}", "Diff: review marks: \(reviewDoc.text)")
         reviewDoc.updateChangeCount(.changeCleared)
         reviewDoc.close()
         let wordURL = dir.appendingPathComponent("changes.docx")
         do {
-            try diff.exportWord(to: wordURL)
+            try await diff.exportWord(to: wordURL)
             let back = try DocumentImporter.markdown(fromFileAt: wordURL)
             check(back.contains("{--quick--}") && back.contains("{++slow++}"), "Diff: Word export has tracked changes: \(back.prefix(80))")
         } catch {
@@ -1062,6 +1064,16 @@ final class SelfTest {
               "Diff: ⌘↓ / ⌘↑ move between changes (\(String(describing: afterDown)), \(String(describing: diff.currentChange)))")
         diff.close()
 
+        // Outputs come from the source text even when the window ignores formatting
+        let formatted = DiffWindowController(oldTitle: "F1", old: "**bold** old", newTitle: "F2", new: "**bold** new")
+        formatted.ignoreWhitespace = false; formatted.ignoreCase = false; formatted.ignoreFormatting = true
+        await formatted.recompute()
+        let formattedDoc = await formatted.openAsReviewMarks()
+        check(formattedDoc.text == "**bold** {--old--}{++new++}", "Diff: ignoring formatting, review marks keep the Markdown: \(formattedDoc.text)")
+        formattedDoc.updateChangeCount(.changeCleared)
+        formattedDoc.close()
+        formatted.close()
+
         // Screenshots with wrapped, inserted and deleted lines
         let oldSample = "# Results\n\nThe experiment was repeated three times with the same settings, and the values were averaged before the statistical analysis was performed on the whole data set.\n\nThis paragraph was removed.\n\nAll samples were stored at room temperature.\nThe end."
         let newSample = "# Results\n\nThe experiment was repeated five times with identical settings, and the values were averaged before the analysis.\n\nAll samples were stored at 4 °C.\nA new line was added here.\nThe end."
@@ -1072,6 +1084,8 @@ final class SelfTest {
         sample.window?.setContentSize(NSSize(width: 1000, height: 460))
         await sample.recompute()
         sample.selectNextChange()
+        let summaryCount = { (c: DiffWindowController) in c.summary().components(separatedBy: "\n").first { $0.hasPrefix("Changes:") } ?? "" }
+        let sideSummary = summaryCount(sample)
         if let w = sample.window {
             await wait(0.4)
             await snapshot(w, name: "diff-side-by-side")
@@ -1081,6 +1095,8 @@ final class SelfTest {
             sample.layout = .inline
             await wait(0.3)
             await snapshot(w, name: "diff-inline")
+            check(sideSummary == "Changes: 2" && summaryCount(sample) == "Changes: 8",
+                  "Diff: change counts follow the layout's navigation (\(sideSummary), \(summaryCount(sample)))")
         }
         sample.close()
 

@@ -845,10 +845,21 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
                                   allowsReviewMarks: !isLatex, baseURL: markdownDocument?.baseDirectory)
     }
 
-    /// Compares the saved file on disk (old) with the editor text (new).
+    /// Compares the text as last opened or explicitly saved (old) with the editor text (new); the file on
+    /// disk is only a fallback, since autosaving in place rewrites it continually.
     @objc func compareWithSaved(_ sender: Any?) {
-        guard let url = markdownDocument?.fileURL else { return }
+        guard let doc = markdownDocument, let url = doc.fileURL else { return }
         commitEditing()
+        if let saved = doc.savedText {
+            let label: String
+            if let date = doc.savedDate {
+                label = LF("compare.lastSavedAt", "Last Saved (%@)", DateFormatter.localizedString(from: date, dateStyle: .none, timeStyle: .short))
+            } else {
+                label = L("compare.openedVersion", "Opened Version")
+            }
+            showDiff(oldTitle: "\(compareTitle) – \(label)", old: saved, newTitle: compareTitle, new: editor.string)
+            return
+        }
         do {
             let saved = DocumentImporter.decodeText(try Data(contentsOf: url))
             showDiff(oldTitle: LF("compare.saved", "%@ (saved)", compareTitle), old: saved, newTitle: compareTitle, new: editor.string)

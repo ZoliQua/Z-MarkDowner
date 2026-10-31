@@ -13,7 +13,10 @@ final class DiffWindowController: NSWindowController, NSWindowDelegate {
     private let oldSource: String
     private let newSource: String
 
-    private(set) var result: DiffResult?
+    /// The on-screen comparison.
+    var result: DiffResult? { shownResult?.value }
+    private var shownResult: (options: DiffOptions, value: DiffResult)?
+    private var sourceCache: (options: DiffOptions, value: DiffResult)?
 
     var layout: Layout = .sideBySide {
         didSet {
@@ -281,6 +284,7 @@ final class DiffWindowController: NSWindowController, NSWindowDelegate {
         inlineScroll.isHidden = side
         currentChange = nil
         updatePosition()
+        updateStats()
         if side {
             window?.layoutIfNeeded()
             alignRows()
@@ -305,7 +309,7 @@ final class DiffWindowController: NSWindowController, NSWindowDelegate {
         }.value
         guard current == generation else { return }
         progress.stopAnimation(nil)
-        self.result = result
+        self.shownResult = (options, result)
         self.rendering = rendering
         oldTextView.textStorage?.setAttributedString(rendering.old)
         newTextView.textStorage?.setAttributedString(rendering.new)
@@ -321,14 +325,25 @@ final class DiffWindowController: NSWindowController, NSWindowDelegate {
             statsLabel.stringValue = L("diff.noDifferences", "No differences")
         } else {
             statsLabel.stringValue = LF("diff.stats", "%d words inserted · %d words deleted · %d changes",
-                                        result.insertedWords, result.deletedWords, rendering.inlineChanges.count)
+                                        result.insertedWords, result.deletedWords, changeCount)
         }
     }
 
-    private func reviewMarkdown() -> String {
-        let result = self.result ?? TextDiff.compare(oldSource, newSource,
-                                                     options: DiffOptions(ignoreWhitespace: ignoreWhitespace, ignoreCase: ignoreCase))
-        return TextDiff.criticMarkup(result.segments)
+    /// Source-level diff (whitespace and case options only) for the outputs, so review marks and Word
+    /// changes keep the Markdown even when the window compares the prose ("ignore formatting").
+    /// Computed in the background when first needed and reused while the options stay the same.
+    private func sourceResult() async -> DiffResult {
+        let options = DiffOptions(ignoreWhitespace: ignoreWhitespace, ignoreCase: ignoreCase)
+        if !ignoreFormatting, let shown = shownResult, shown.options == options { return shown.value }
+        if let cached = sourceCache, cached.options == options { return cached.value }
+        let old = oldSource, new = newSource
+        let value = await Task.detached(priority: .userInitiated) { TextDiff.compare(old, new, options: options) }.value
+        sourceCache = (options, value)
+        return value
+    }
+
+    private func reviewMarkdown() async -> String {
+        TextDiff.criticMarkup(await sourceResult().segments)
     }
 
     // MARK: - Side by side alignment
@@ -449,9 +464,10 @@ final class DiffWindowController: NSWindowController, NSWindowDelegate {
 
     /// A new untitled Markdown document with the new text and `{--old--}{++new++}` marks.
     @discardableResult
-    func openAsReviewMarks() -> MarkdownDocument {
+    func openAsReviewMarks() async -> MarkdownDocument {
+        let text = await reviewMarkdown()
         let doc = MarkdownDocument()
-        doc.text = reviewMarkdown()
+        doc.text = text
         NSDocumentController.shared.addDocument(doc)
         doc.makeWindowControllers()
         doc.showWindows()
@@ -460,9 +476,10 @@ final class DiffWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// Writes a Word file in which the changes are tracked (deletions and insertions).
-    func exportWord(to url: URL) throws {
+    func exportWord(to url: URL) async throws {
         let title = (newTitle as NSString).deletingPathExtension
-        try DocxExporter.data(markdown: reviewMarkdown(), options: Settings.shared.exportOptions(title: title, baseURL: baseURL))
+        let markdown = await reviewMarkdown()
+        try DocxExporter.data(markdown: markdown, options: Settings.shared.exportOptions(title: title, baseURL: baseURL))
             .write(to: url, options: .atomic)
     }
 
@@ -472,7 +489,7 @@ final class DiffWindowController: NSWindowController, NSWindowDelegate {
         if let result {
             lines.append(LF("diff.summaryInserted", "Words inserted: %d", result.insertedWords))
             lines.append(LF("diff.summaryDeleted", "Words deleted: %d", result.deletedWords))
-            lines.append(LF("diff.summaryChanges", "Changes: %d", rendering.inlineChanges.count))
+            lines.append(LF("diff.summaryChanges", "Changes: %d", changeCount))
         }
         return lines.joined(separator: "\n") + "\n"
     }
@@ -499,7 +516,7 @@ final class DiffWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func openReviewMarks(_ sender: Any?) {
         guard allowsReviewMarks else { return }
-        openAsReviewMarks()
+        Task { await openAsReviewMarks() }
     }
 
     @objc private func exportWordChanges(_ sender: Any?) {
@@ -512,13 +529,15 @@ final class DiffWindowController: NSWindowController, NSWindowDelegate {
         panel.directoryURL = baseURL
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
-            do {
-                try self.exportWord(to: url)
-            } catch {
-                let alert = NSAlert(error: error)
-                alert.messageText = L("export.failed", "Export failed")
-                alert.informativeText = error.localizedDescription
-                alert.beginSheetModal(for: window, completionHandler: nil)
+            Task { @MainActor in
+                do {
+                    try await self.exportWord(to: url)
+                } catch {
+                    let alert = NSAlert(error: error)
+                    alert.messageText = L("export.failed", "Export failed")
+                    alert.informativeText = error.localizedDescription
+                    alert.beginSheetModal(for: window, completionHandler: nil)
+                }
             }
         }
     }
