@@ -483,10 +483,12 @@ public enum ReviewAnchor {
         let uncited = withoutCitations(q)
         if !uncited.isEmpty, uncited != q { variants.append(uncited) }
         for variant in variants {
-            let found = occurrences(of: variant, in: normalized)
+            let (found, inWords) = occurrences(of: variant, in: normalized)
             if found.isEmpty { continue }
-            if found.count == 1, variant.count >= 3 { return normalized.sourceRange(found[0]) }
-            return byContext(found, before: b, after: a, in: normalized).map(normalized.sourceRange)
+            if !inWords, found.count == 1, variant.count >= 3 { return normalized.sourceRange(found[0]) }
+            if let r = byContext(found, before: b, after: a, in: normalized) { return normalized.sourceRange(r) }
+            // Matches inside longer words are only trusted with context; otherwise try the rest.
+            if !inWords { return nil }
         }
         guard q.count >= 3 else { return nil }
         return fuzzy(quote: NormalizedText.tokenize(Array(variants.last!.utf16)).map(\.text), before: b, after: a, in: normalized)
@@ -504,8 +506,9 @@ public enum ReviewAnchor {
             .trimmingCharacters(in: .whitespaces)
     }
 
-    /// Exact occurrences in normalized units; those on word boundaries when there are any.
-    private static func occurrences(of quote: String, in normalized: NormalizedText) -> [NSRange] {
+    /// Exact occurrences in normalized units: those on word boundaries, or when there are none, those
+    /// inside longer words (`inWords`).
+    private static func occurrences(of quote: String, in normalized: NormalizedText) -> (ranges: [NSRange], inWords: Bool) {
         let hay = normalized.text as NSString
         var found: [NSRange] = []
         var from = 0
@@ -523,35 +526,38 @@ public enum ReviewAnchor {
             let endOK = end == units.count || !NormalizedText.isWordUnit(q[q.count - 1]) || !NormalizedText.isWordUnit(units[end])
             return startOK && endOK
         }
-        return bounded.isEmpty ? found : bounded
+        return bounded.isEmpty ? (found, !found.isEmpty) : (bounded, false)
     }
 
-    /// The occurrence whose neighbouring words (then characters) agree best with the context; `nil` on a tie.
+    /// The occurrence whose neighbouring words agree best with the context, provided at least half of
+    /// the context words on one side match there and no other occurrence agrees as well; else `nil`.
     private static func byContext(_ found: [NSRange], before: String, after: String, in normalized: NormalizedText) -> NSRange? {
-        guard !before.isEmpty || !after.isEmpty else { return nil }
         let beforeWords = NormalizedText.tokenize(Array(before.utf16)).map(\.text)
         let afterWords = NormalizedText.tokenize(Array(after.utf16)).map(\.text)
-        let beforeUnits = Array(before.utf16), afterUnits = Array(after.utf16)
+        guard !beforeWords.isEmpty || !afterWords.isEmpty else { return nil }
         let tokens = normalized.tokens
-        var best: (words: Int, chars: Int) = (0, 0)
-        var winners: [NSRange] = []
-        for r in found {
+        func agreement(_ r: NSRange) -> (before: Int, after: Int) {
             let firstAfter = partition(tokens) { $0.start >= NSMaxRange(r) }
             let lastBefore = partition(tokens) { $0.end > r.location }
             let preceding = tokens[max(0, lastBefore - beforeWords.count)..<lastBefore].map(\.text)
             let following = tokens[firstAfter..<min(tokens.count, firstAfter + afterWords.count)].map(\.text)
-            let words = shared(beforeWords, preceding) + shared(afterWords, following)
-            let chars = commonSuffix(beforeUnits, normalized.units[..<r.location])
-                + commonPrefix(afterUnits, normalized.units[NSMaxRange(r)...])
-            let score = (words, chars)
-            if score > best {
+            return (shared(beforeWords, preceding), shared(afterWords, following))
+        }
+        var best: (before: Int, after: Int) = (0, 0)
+        var winners: [NSRange] = []
+        for r in found {
+            let score = agreement(r)
+            let total = score.before + score.after, bestTotal = best.before + best.after
+            if total > bestTotal {
                 best = score
                 winners = [r]
-            } else if score == best {
+            } else if total == bestTotal, total > 0 {
                 winners.append(r)
             }
         }
-        return best > (0, 0) && winners.count == 1 ? winners[0] : nil
+        let enough = (!beforeWords.isEmpty && best.before * 2 >= beforeWords.count)
+            || (!afterWords.isEmpty && best.after * 2 >= afterWords.count)
+        return enough && winners.count == 1 ? winners[0] : nil
     }
 
     /// The first index where `isAfter` holds, for a predicate that is false then true along `tokens`.
@@ -573,15 +579,6 @@ public enum ReviewAnchor {
             n += 1
         }
         return n
-    }
-
-    private static func commonSuffix(_ a: [UInt16], _ b: ArraySlice<UInt16>) -> Int {
-        let a = a.reversed().drop { $0 == 0x20 }, b = b.reversed().drop { $0 == 0x20 }
-        return zip(a, b).prefix { $0 == $1 }.count
-    }
-
-    private static func commonPrefix(_ a: [UInt16], _ b: ArraySlice<UInt16>) -> Int {
-        zip(a.drop { $0 == 0x20 }, b.drop { $0 == 0x20 }).prefix { $0 == $1 }.count
     }
 
     /// The window of `quote.count` source words (a gap between words for an empty quote) scoring

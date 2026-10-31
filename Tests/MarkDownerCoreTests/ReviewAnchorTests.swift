@@ -181,4 +181,21 @@ final class ReviewAnchorTests: XCTestCase {
         let r = ReviewAnchor.locate(quote: "The e\u{FB03}cient method (details) is", before: "", after: "", in: n)
         XCTAssertEqual(source(text, r), "The **efficient** method ([details](#d)) is")
     }
+    func testWrongOrIncidentalContextIsNil() {
+        let text = "First load the data. Then filter the data carefully. Finally plot the data."
+        let n = NormalizedText(source: text, format: .plain)
+        XCTAssertNil(ReviewAnchor.locate(quote: "data", before: "we never measured ", after: " yesterday at all", in: n))
+        // One stray shared word ("carefully" follows only the second occurrence) is not enough evidence.
+        XCTAssertNil(ReviewAnchor.locate(quote: "data", before: "we never measured ", after: " so carefully again today", in: n))
+        // "the" precedes every occurrence: agreement, but not unique.
+        XCTAssertNil(ReviewAnchor.locate(quote: "data", before: "compute the ", after: "", in: n))
+    }
+
+    func testQuoteOnlyInsideLongerWordNeedsContext() {
+        let text = "We store the metadata in a separate table."
+        let n = NormalizedText(source: text, format: .plain)
+        XCTAssertNil(ReviewAnchor.locate(quote: "data", before: "", after: "", in: n))
+        let r = ReviewAnchor.locate(quote: "data", before: "We store the meta", after: " in a separate", in: n)
+        XCTAssertEqual(r, (text as NSString).range(of: "data"))
+    }
 }
