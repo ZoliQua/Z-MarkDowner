@@ -81,6 +81,18 @@ public enum PDFTextExtractor {
         return PDFExtraction(markdown: markdown, lines: ordered, ocrPages: ocrPages, warnings: warnings)
     }
 
+    /// Each page's cleaned lines in reading order, without OCR (the text layer the annotations sit on).
+    static func readingLines(of document: PDFDocument) -> [[PDFLine]] {
+        var pages: [[PDFLine]] = []
+        var pageBounds: [CGRect] = []
+        for index in 0..<document.pageCount {
+            let page = document.page(at: index)
+            pages.append(page.map { readLines(of: $0, index: index) } ?? [])
+            pageBounds.append(page?.bounds(for: .mediaBox) ?? .zero)
+        }
+        return cleanLines(pages, pageBounds: pageBounds).map(readingOrder)
+    }
+
     // MARK: Reading lines
 
     private static func readLines(of page: PDFPage, index: Int) -> [PDFLine] {
@@ -236,7 +248,7 @@ public enum PDFTextExtractor {
         return out
     }
 
-    private static func collapseWhitespace(_ s: String) -> String {
+    static func collapseWhitespace(_ s: String) -> String {
         s.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
     }
@@ -413,7 +425,7 @@ public enum PDFTextExtractor {
     }
 
     /// Joins the lines of a block, undoing end-of-line hyphenation.
-    private static func joined(_ texts: [String]) -> String {
+    static func joinLines(_ texts: [String]) -> String {
         var out = ""
         for text in texts {
             if out.isEmpty {
@@ -481,7 +493,7 @@ public enum PDFTextExtractor {
                 blocks.append(block)
             }
         }
-        for i in blocks.indices { blocks[i].text = joined(blocks[i].lines.map(\.text)) }
+        for i in blocks.indices { blocks[i].text = joinLines(blocks[i].lines.map(\.text)) }
 
         /// Short blocks not ending with "."; numbered lines ("2. Methods") qualify and keep their number.
         func isHeadingCandidate(_ block: Block) -> Bool {

@@ -95,4 +95,65 @@ enum SyntheticPDF {
         if let text { draw(text, size: fontSize, bold: false, x: 72, y: pageSize.height - 200, in: context) }
         return context.makeImage()
     }
+    // MARK: Annotations
+
+    /// The bounds of the first occurrence of `text` on a page.
+    static func bounds(of text: String, in document: PDFDocument, page index: Int = 0) -> CGRect {
+        guard let page = document.page(at: index),
+              let selection = document.findString(text, withOptions: []).first(where: { $0.pages.contains(page) }) else {
+            fatalError("\(text) not found on page \(index)")
+        }
+        return selection.bounds(for: page)
+    }
+
+    /// A text markup annotation (highlight, strike-out, …) with one quad per rectangle, as review tools create them.
+    static func markup(_ type: PDFAnnotationSubtype, over rects: [CGRect], contents: String? = nil,
+                       author: String? = nil) -> PDFAnnotation {
+        let union = rects.dropFirst().reduce(rects[0]) { $0.union($1) }
+        let annotation = PDFAnnotation(bounds: union, forType: type, withProperties: nil)
+        annotation.quadrilateralPoints = rects.flatMap { rect -> [NSValue] in
+            let r = rect.offsetBy(dx: -union.minX, dy: -union.minY)
+            return [NSPoint(x: r.minX, y: r.maxY), NSPoint(x: r.maxX, y: r.maxY),
+                    NSPoint(x: r.minX, y: r.minY), NSPoint(x: r.maxX, y: r.minY)].map { NSValue(point: $0) }
+        }
+        annotation.contents = contents
+        annotation.userName = author
+        return annotation
+    }
+
+    /// The document after saving and reading it back, as the extractor sees a file on disk.
+    static func reloaded(_ document: PDFDocument) -> PDFDocument {
+        guard let data = document.dataRepresentation(), let copy = PDFDocument(data: data) else {
+            fatalError("Cannot save synthetic PDF")
+        }
+        return copy
+    }
+
+    /// A one-page PDF written by hand, for annotation keys PDFKit cannot write (such as `/IRT`).
+    ///
+    /// `text` is drawn in 11 pt Helvetica at (72, 700); each entry of `annotations` is an annotation
+    /// dictionary and becomes object 6, 7, … in order, so they can refer to each other.
+    static func makeRaw(text: String, annotations: [String]) -> PDFDocument {
+        let stream = "BT /F1 11 Tf 72 700 Td (\(text)) Tj ET"
+        let annots = annotations.indices.map { "\($0 + 6) 0 R" }.joined(separator: " ")
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R /Annots [\(annots)] >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Length \(stream.utf8.count) >>\nstream\n\(stream)\nendstream",
+        ] + annotations
+        var out = "%PDF-1.7\n"
+        var offsets: [Int] = []
+        for (i, object) in objects.enumerated() {
+            offsets.append(out.utf8.count)
+            out += "\(i + 1) 0 obj\n\(object)\nendobj\n"
+        }
+        let xref = out.utf8.count
+        out += "xref\n0 \(objects.count + 1)\n0000000000 65535 f \n"
+        for offset in offsets { out += String(format: "%010d 00000 n \n", offset) }
+        out += "trailer\n<< /Size \(objects.count + 1) /Root 1 0 R >>\nstartxref\n\(xref)\n%%EOF\n"
+        guard let document = PDFDocument(data: Data(out.utf8)) else { fatalError("Cannot read raw PDF") }
+        return document
+    }
 }
