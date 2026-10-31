@@ -96,6 +96,42 @@ final class ReviewSessionTests: XCTestCase {
                                                 at: wide, in: text, format: .latex))
     }
 
+    func testReplaceKeepsLatexMarkup() throws {
+        let text = "We study \\textit{rare} birds in winter."
+        let anchor = range(of: "rare} birds", in: text)
+        let replaced = try ReviewSession.edit(applying: .replace(target: "rare birds", with: "common finches"),
+                                              at: anchor, in: text, format: .latex)
+        XCTAssertEqual(replaced.text, "We study \\textit{common finches} in winter.")
+        XCTAssertEqual(replaced.range, range(of: "common finches", in: replaced.text))
+        XCTAssertEqual(replaced.delta, ("common finches}" as NSString).length - ("rare} birds" as NSString).length)
+        let deleted = try ReviewSession.edit(applying: .delete(target: "rare birds"), at: anchor, in: text, format: .latex)
+        XCTAssertEqual(deleted.text, "We study \\textit{} in winter.")
+        let wide = NSRange(location: range(of: "study", in: text).location, length: anchor.upperBound - range(of: "study", in: text).location)
+        let inner = try ReviewSession.edit(applying: .replace(target: "rare birds", with: "owls"), at: wide, in: text, format: .latex)
+        XCTAssertEqual(inner.text, "We study \\textit{owls} in winter.")
+    }
+
+    func testReplaceKeepsMarkdownMarkup() throws {
+        let text = "Some *quoted* words here."
+        let whole = try ReviewSession.edit(applying: .replace(target: "quoted words", with: "cited terms"),
+                                           at: range(of: "quoted* words", in: text), in: text, format: .markdown)
+        XCTAssertEqual(whole.text, "Some *cited terms* here.")
+        let bold = "A **bold** claim."
+        let edge = try ReviewSession.edit(applying: .replace(target: "bold", with: "strong"),
+                                          at: range(of: "**bold**", in: bold), in: bold, format: .markdown)
+        XCTAssertEqual(edge.text, "A **strong** claim.")
+    }
+
+    func testEditAcrossLinkThrowsSpansMarkup() {
+        let text = "See [the docs](https://example.com) now."
+        XCTAssertThrowsError(try ReviewSession.edit(applying: .replace(target: "docs now", with: "manual"),
+                                                    at: range(of: "docs](https://example.com) now", in: text),
+                                                    in: text, format: .markdown)) { error in
+            guard case ReviewSessionError.spansMarkup? = error as? ReviewSessionError else { return XCTFail("unexpected \(error)") }
+            XCTAssertNotNil((error as? LocalizedError)?.errorDescription)
+        }
+    }
+
     // MARK: Persistence
 
     private func sampleSession() -> ReviewSession {
@@ -125,6 +161,24 @@ final class ReviewSessionTests: XCTestCase {
         XCTAssertNil(ReviewSession.load(for: source))
         try Data("not json {".utf8).write(to: ReviewSession.sidecarURL(for: source))
         XCTAssertNil(ReviewSession.load(for: source))
+    }
+
+    func testSidecarFromOtherPDFIgnored() throws {
+        let source = folder.appendingPathComponent("paper.tex")
+        var session = sampleSession()
+        let pdf = folder.appendingPathComponent("review.pdf")
+        try Data("%PDF".utf8).write(to: pdf)
+        session.pdfPath = pdf.path
+        try session.save(for: source)
+        XCTAssertEqual(ReviewSession.load(for: source, pdf: pdf), session)
+        XCTAssertEqual(ReviewSession.load(for: source, pdf: folder.appendingPathComponent("./review.pdf")), session)
+        XCTAssertEqual(ReviewSession.load(for: source), session)
+        XCTAssertNil(ReviewSession.load(for: source, pdf: folder.appendingPathComponent("other.pdf")))
+
+        session.pdfPath = "/no/longer/here/review.pdf"
+        try session.save(for: source)
+        XCTAssertEqual(ReviewSession.load(for: source, pdf: pdf), session, "a moved PDF is recognised by name")
+        XCTAssertNil(ReviewSession.load(for: source, pdf: folder.appendingPathComponent("round2.pdf")))
     }
 
     // MARK: Review marks
@@ -164,6 +218,15 @@ final class ReviewSessionTests: XCTestCase {
                        "# Results\n\nResults show {==bugs==}{>>add more<<}{++ and errors++}.")
     }
 
+    func testMarkdownMarksLeaveSuggestionAcrossMarkupOut() {
+        let comment = ReviewComment(id: "p0-0", page: 0, author: "R", kind: .highlight, quotedText: "quoted words",
+                                    comment: "reword", suggestion: .replace(target: "quoted words", with: "cited terms"))
+        let session = ReviewSession(pdfPath: "r.pdf", mainPath: "/x/p.md", sourceFormat: .markdown, comments: [comment])
+        let marked = session.markdownMarks(source: "Some *quoted* words here.")
+        XCTAssertFalse(marked.contains("{~~"), marked)
+        XCTAssertTrue(marked.contains("{>>R: reword<<}"), marked)
+    }
+
     // MARK: Response letter
 
     func testResponseLetter() {
@@ -179,5 +242,20 @@ final class ReviewSessionTests: XCTestCase {
         XCTAssertTrue(letter.contains("**Status:** Done"), letter)
         XCTAssertTrue(letter.contains("**Reply:** Fixed."), letter)
         XCTAssertEqual(letter.components(separatedBy: "**Reply:**").count, 2, letter)
+    }
+
+    func testResponseLetterEscapesMarkdown() {
+        let comment = ReviewComment(id: "p0-0", page: 0, author: "Dr *Star*", kind: .highlight, quotedText: "a *bold* _claim_",
+                                    comment: "> not a quote\n1. not a list", status: .done,
+                                    reply: "Fixed *all*.\n\n# heading\n---")
+        let session = ReviewSession(pdfPath: "r.pdf", mainPath: "/x/p.md", sourceFormat: .markdown, comments: [comment])
+        let letter = session.responseLetter(title: "# Reply to *R1*")
+        XCTAssertTrue(letter.hasPrefix("# \\# Reply to \\*R1\\*\n"), letter)
+        XCTAssertTrue(letter.contains("### 1. p. 1 — Dr \\*Star\\*"), letter)
+        XCTAssertTrue(letter.contains("> a \\*bold\\* \\_claim\\_"), letter)
+        XCTAssertTrue(letter.contains("\\> not a quote\n1\\. not a list"), letter)
+        XCTAssertTrue(letter.contains("**Reply:** Fixed \\*all\\*.\n\n\\# heading\n\\---"), letter)
+        let blocks = MarkdownParser.parseBlocks(letter)
+        XCTAssertEqual(blocks.filter { if case .heading = $0 { return true } else { return false } }.count, 2, "\(blocks)")
     }
 }

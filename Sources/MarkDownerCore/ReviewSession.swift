@@ -27,6 +27,8 @@ public enum ReviewSessionError: LocalizedError {
     case targetChanged(String)
     case unanchored
     case noSuggestion
+    /// The target runs across markup that cannot be kept intact; the edit must be made by hand.
+    case spansMarkup
 
     public var errorDescription: String? {
         switch self {
@@ -36,6 +38,8 @@ public enum ReviewSessionError: LocalizedError {
             return L("review.error.unanchored", "The comment could not be found in the source.")
         case .noSuggestion:
             return L("review.error.noSuggestion", "The comment has no suggestion to apply.")
+        case .spansMarkup:
+            return L("review.error.spansMarkup", "The suggested change runs across formatting or a link. Please make it by hand.")
         }
     }
 }
@@ -55,10 +59,17 @@ extension ReviewSession {
         try encoder.encode(self).write(to: Self.sidecarURL(for: source), options: .atomic)
     }
 
-    /// The session saved for `source`, or nil when there is none or it cannot be read.
-    public static func load(for source: URL) -> ReviewSession? {
-        guard let data = try? Data(contentsOf: sidecarURL(for: source)) else { return nil }
-        return try? JSONDecoder().decode(ReviewSession.self, from: data)
+    /// The session saved for `source`, or nil when there is none, it cannot be read, or — when `pdf`
+    /// is given — it was made from another PDF. A stored PDF that no longer exists at its path is
+    /// matched by file name, so a moved review PDF still finds its session.
+    public static func load(for source: URL, pdf: URL? = nil) -> ReviewSession? {
+        guard let data = try? Data(contentsOf: sidecarURL(for: source)),
+              let session = try? JSONDecoder().decode(ReviewSession.self, from: data) else { return nil }
+        guard let pdf else { return session }
+        let stored = URL(fileURLWithPath: session.pdfPath).standardizedFileURL
+        if stored.path == pdf.standardizedFileURL.path { return session }
+        let moved = !FileManager.default.fileExists(atPath: stored.path)
+        return moved && stored.lastPathComponent == pdf.lastPathComponent ? session : nil
     }
 
     // MARK: Applying suggestions
@@ -69,74 +80,136 @@ extension ReviewSession {
     /// The target is checked first, comparing prose as `format` reads it: for a replacement or deletion
     /// it must be the text at `range` or occur exactly once inside it; for an insertion after (before)
     /// it must end (start) at the corresponding edge of `range`. Otherwise `.targetChanged` is thrown.
+    ///
+    /// Markup is never removed: when the target's words are split by markup (`\textit{rare} birds`,
+    /// `*quoted* words`), the replacement takes the place of the words before the first markup
+    /// character and the later words are dropped, keeping every brace, emphasis marker and command.
+    /// Markup that carries text of its own (a link target, a citation key) throws `.spansMarkup`.
     public static func edit(applying suggestion: Suggestion, at range: NSRange, in text: String,
                             format: SourceFormat = .plain) throws -> (text: String, range: NSRange, delta: Int) {
-        guard let target = targetRange(for: suggestion, at: range, in: text, format: format) else {
+        let normalized = NormalizedText(source: text, format: format)
+        guard let target = target(of: suggestion, at: range, in: text, normalized: normalized) else {
             throw ReviewSessionError.targetChanged(suggestion.target)
         }
         let source = text as NSString
-        var replaced = target
-        let replacement: String
+        let insert: String
         switch suggestion {
-        case .replace(_, let with): replacement = with
-        case .insertAfter(_, let insert), .insertBefore(_, let insert): replacement = insert
-        case .delete:
-            replacement = ""
-            replaced = widenedOverSpace(target, in: source)
+        case .replace(_, let with): insert = with
+        case .insertAfter(_, let text), .insertBefore(_, let text): insert = text
+        case .delete: insert = ""
+        }
+        var replaced = target.range
+        var replacement = insert
+        if let first = target.markup.first {
+            guard target.markup.allSatisfy({ isKeepableMarkup(at: $0, in: source) }) else { throw ReviewSessionError.spansMarkup }
+            let words = source.substring(with: NSRange(location: replaced.location, length: first - replaced.location))
+            let gap = String(words.reversed().prefix(while: \.isWhitespace).reversed())
+            replacement += gap + target.markup.map { source.substring(with: NSRange(location: $0, length: 1)) }.joined()
+        } else if case .delete = suggestion {
+            replaced = widenedOverSpace(replaced, in: source)
         }
         let result = source.replacingCharacters(in: replaced, with: replacement)
         let length = (replacement as NSString).length
-        return (result, NSRange(location: replaced.location, length: length), length - replaced.length)
+        return (result, NSRange(location: replaced.location, length: (insert as NSString).length), length - replaced.length)
     }
 
-    /// The source range the suggestion edits (empty at the insertion point), or nil when its target is
-    /// not where `range` says.
-    static func targetRange(for suggestion: Suggestion, at range: NSRange, in text: String, format: SourceFormat) -> NSRange? {
+    /// The source range a suggestion edits (empty at an insertion point) with the positions of the
+    /// markup characters inside it.
+    struct Target {
+        let range: NSRange
+        let markup: [Int]
+    }
+
+    /// Where the suggestion's target lies at `range` in `text`, or nil when it is not there.
+    static func target(of suggestion: Suggestion, at range: NSRange, in text: String, normalized: NormalizedText) -> Target? {
         let source = text as NSString
         guard range.location >= 0, NSMaxRange(range) <= source.length else { return nil }
-        let needle = prose(suggestion.target, format: .plain)
+        let needle = NormalizedText(source: suggestion.target, format: .plain).text.trimmingCharacters(in: .whitespaces)
         guard !needle.isEmpty else { return nil }
-        let reach = (needle as NSString).length * 3 + 64
+        let units = normalized.units
+        let count = units.count
+        let space: UInt16 = 0x20
         switch suggestion {
         case .replace, .delete:
-            let normalized = NormalizedText(source: source.substring(with: range), format: format)
-            let hay = normalized.text as NSString
-            if prose(normalized.text, format: .plain) == needle { return range }
-            let found = wordOccurrences(of: needle, in: hay)
-            guard found.count == 1 else { return nil }
-            let inner = normalized.sourceRange(found[0])
-            return NSRange(location: range.location + inner.location, length: inner.length)
+            var lo = 0
+            while lo < count && normalized.map[lo] < range.location { lo += 1 }
+            var hi = lo
+            while hi < count && normalized.ends[hi] <= NSMaxRange(range) { hi += 1 }
+            while lo < hi && units[lo] == space { lo += 1 }
+            while hi > lo && units[hi - 1] == space { hi -= 1 }
+            guard lo < hi else { return nil }
+            let hay = String(decoding: units[lo..<hi], as: UTF16.self) as NSString
+            var found = NSRange(location: 0, length: hay.length)
+            if hay as String != needle {
+                let occurrences = wordOccurrences(of: needle, in: hay)
+                guard occurrences.count == 1 else { return nil }
+                found = occurrences[0]
+            }
+            let span = NSRange(location: lo + found.location, length: found.length)
+            let target = normalized.sourceRange(span)
+            return Target(range: target, markup: markup(in: target, units: span, of: source, normalized: normalized))
         case .insertAfter:
-            let end = NSMaxRange(range)
-            let start = min(range.location, max(0, end - reach))
-            let window = NormalizedText(source: source.substring(with: NSRange(location: start, length: end - start)), format: format).text
-            let trimmed = window.trimmingCharacters(in: .whitespaces) as NSString
-            let found = wordOccurrences(of: needle, in: trimmed)
-            guard let last = found.last, NSMaxRange(last) == trimmed.length else { return nil }
-            return NSRange(location: end, length: 0)
+            var k = 0
+            while k < count && normalized.ends[k] <= NSMaxRange(range) { k += 1 }
+            while k > 0 && units[k - 1] == space { k -= 1 }
+            guard hasWord(needle, in: units, from: k - (needle as NSString).length) else { return nil }
+            return Target(range: NSRange(location: NSMaxRange(range), length: 0), markup: [])
         case .insertBefore:
-            let end = max(NSMaxRange(range), min(source.length, range.location + reach))
-            let window = NormalizedText(source: source.substring(with: NSRange(location: range.location, length: end - range.location)), format: format).text
-            let trimmed = window.trimmingCharacters(in: .whitespaces) as NSString
-            guard wordOccurrences(of: needle, in: trimmed).first?.location == 0 else { return nil }
-            return NSRange(location: range.location, length: 0)
+            var j = 0
+            while j < count && normalized.map[j] < range.location { j += 1 }
+            while j < count && units[j] == space { j += 1 }
+            guard hasWord(needle, in: units, from: j) else { return nil }
+            return Target(range: NSRange(location: range.location, length: 0), markup: [])
         }
     }
 
-    /// Text reduced to comparable prose: lowercase, typography folded, whitespace collapsed and trimmed.
-    private static func prose(_ text: String, format: SourceFormat) -> String {
-        NormalizedText(source: text, format: format).text.trimmingCharacters(in: .whitespaces)
+    /// The positions in `target` that no normalized unit of `units` came from, whitespace aside: braces,
+    /// emphasis markers, commands, link targets. A space unit standing for `~` counts as markup.
+    private static func markup(in target: NSRange, units span: NSRange, of source: NSString, normalized: NormalizedText) -> [Int] {
+        var covered = IndexSet()
+        for i in span.location..<NSMaxRange(span) {
+            let start = normalized.map[i], end = max(normalized.ends[i], start + 1)
+            if normalized.units[i] == 0x20, let ch = UnicodeScalar(source.character(at: start)),
+               !CharacterSet.whitespacesAndNewlines.contains(ch) { continue }
+            covered.insert(integersIn: start..<end)
+        }
+        return (target.location..<NSMaxRange(target)).filter { position in
+            guard !covered.contains(position) else { return false }
+            guard let ch = UnicodeScalar(source.character(at: position)) else { return true }
+            return !CharacterSet.whitespacesAndNewlines.contains(ch)
+        }
+    }
+
+    /// Whether the markup character at `position` can be kept on its own: a delimiter, or a letter of a
+    /// `\command` name.
+    private static func isKeepableMarkup(at position: Int, in source: NSString) -> Bool {
+        let unit = source.character(at: position)
+        if let ch = UnicodeScalar(unit), "{}*_`~$\\".unicodeScalars.contains(ch) { return true }
+        guard let ch = UnicodeScalar(unit), CharacterSet.letters.contains(ch) else { return false }
+        var i = position - 1
+        while i >= 0, let previous = UnicodeScalar(source.character(at: i)), CharacterSet.letters.contains(previous) { i -= 1 }
+        return i >= 0 && source.character(at: i) == 0x5C
+    }
+
+    /// Whether the normalized `units` hold `needle` as whole words starting at `start`.
+    private static func hasWord(_ needle: String, in units: [UInt16], from start: Int) -> Bool {
+        let length = (needle as NSString).length
+        guard start >= 0, start + length <= units.count else { return false }
+        let lo = max(0, start - 1), hi = min(units.count, start + length + 1)
+        let hay = String(decoding: units[lo..<hi], as: UTF16.self) as NSString
+        return wordOccurrences(of: needle, in: hay).contains { $0.location == start - lo }
     }
 
     /// The occurrences of `needle` in `hay` that do not start or end inside a word.
     private static func wordOccurrences(of needle: String, in hay: NSString) -> [NSRange] {
         var result: [NSRange] = []
         var search = NSRange(location: 0, length: hay.length)
+        let outside: UInt16 = 0x20
         while true {
             let found = hay.range(of: needle, options: .literal, range: search)
             guard found.location != NSNotFound else { break }
-            let before = found.location > 0 ? hay.character(at: found.location - 1) : 0x20
-            let after = NSMaxRange(found) < hay.length ? hay.character(at: NSMaxRange(found)) : 0x20
+            let before = found.location > 0 ? hay.character(at: found.location - 1) : outside
+            let after = NSMaxRange(found) < hay.length ? hay.character(at: NSMaxRange(found)) : outside
             let first = hay.character(at: found.location), last = hay.character(at: NSMaxRange(found) - 1)
             if !(NormalizedText.isWordUnit(before) && NormalizedText.isWordUnit(first))
                 && !(NormalizedText.isWordUnit(after) && NormalizedText.isWordUnit(last)) {
@@ -202,19 +275,23 @@ extension ReviewSession {
         }
         var result = source
         for item in accepted.reversed() {
-            let mark = Self.mark(for: item.comment, at: item.range, in: source)
+            let mark = Self.mark(for: item.comment, at: item.range, in: source, normalized: normalized)
             result = (result as NSString).replacingCharacters(in: item.range, with: mark)
         }
         return result
     }
 
-    private static func mark(for comment: ReviewComment, at range: NSRange, in source: String) -> String {
+    /// The marks for one comment at `range`; a suggestion whose target runs across markup is left out,
+    /// since a change mark around it would break the formatting.
+    private static func mark(for comment: ReviewComment, at range: NSRange, in source: String, normalized: NormalizedText) -> String {
         let text = source as NSString
         let quote = text.substring(with: range)
         let note = PDFTextExtractor.reviewNote(for: comment)
         let highlighted = quote.isEmpty ? note : "{==\(quote)==}" + note
         guard let suggestion = comment.suggestion,
-              let target = targetRange(for: suggestion, at: range, in: source, format: .markdown) else { return highlighted }
+              let found = target(of: suggestion, at: range, in: source, normalized: normalized),
+              found.markup.isEmpty else { return highlighted }
+        let target = found.range
         let old = text.substring(with: target)
         let change: Suggestion
         switch suggestion {
@@ -233,24 +310,39 @@ extension ReviewSession {
     /// A Markdown response to the reviewers: `title` as heading, then for each comment its number, page
     /// and author, the quoted text, the comment, its status and the user's reply.
     public func responseLetter(title: String) -> String {
-        var lines = ["# \(title)", ""]
+        var lines = ["# " + Self.markdownLine(PDFTextExtractor.singleLine(title)), ""]
         for (index, comment) in comments.enumerated() {
             var heading = "### \(index + 1). \(CoreStrings.pdfCommentPage(comment.page + 1))"
-            let author = PDFTextExtractor.singleLine(comment.author)
-            if !author.isEmpty { heading += " — \(author)" }
+            let author = PDFTextExtractor.singleLine(comment.author).trimmingCharacters(in: .whitespaces)
+            if !author.isEmpty { heading += " — " + AttributedToMarkdown.escape(author) }
             lines += [heading, ""]
             let quote = comment.quotedText.trimmingCharacters(in: .whitespacesAndNewlines)
             if !quote.isEmpty {
-                lines += quote.components(separatedBy: .newlines).map { "> " + $0 }
+                lines += Self.markdownLines(quote).map { $0.isEmpty ? ">" : "> " + $0 }
                 lines.append("")
             }
             let text = comment.comment.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty { lines += [text, ""] }
+            if !text.isEmpty { lines += Self.markdownLines(text) + [""] }
             lines += ["**\(L("review.letter.status", "Status")):** \(Self.statusName(comment.status))", ""]
             let reply = comment.reply.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !reply.isEmpty { lines += ["**\(L("review.letter.reply", "Reply")):** \(reply)", ""] }
+            if !reply.isEmpty {
+                var replyLines = Self.markdownLines(reply)
+                replyLines[0] = "**\(L("review.letter.reply", "Reply")):** " + replyLines[0]
+                lines += replyLines + [""]
+            }
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// `text` as Markdown lines that read literally: inline markup escaped, block markers at line starts
+    /// escaped, and leading indentation dropped so no line becomes a code block.
+    private static func markdownLines(_ text: String) -> [String] {
+        text.components(separatedBy: .newlines).map(markdownLine)
+    }
+
+    private static func markdownLine(_ line: String) -> String {
+        let trimmed = String(line.drop(while: { $0 == " " || $0 == "\t" }))
+        return AttributedToMarkdown.escapeLineStart(AttributedToMarkdown.escape(trimmed))
     }
 
     public static func statusName(_ status: ReviewStatus) -> String {

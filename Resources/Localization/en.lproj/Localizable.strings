@@ -262,6 +262,7 @@
 "prefs.writing" = "Writing";
 "preview.accessibility" = "Rendered document";
 "review.error.noSuggestion" = "The comment has no suggestion to apply.";
+"review.error.spansMarkup" = "The suggested change runs across formatting or a link. Please make it by hand.";
 "review.error.targetChanged" = "The text “%@” is no longer where the comment points. The source may have been edited.";
 "review.error.unanchored" = "The comment could not be found in the source.";
 "review.letter.reply" = "Reply";
