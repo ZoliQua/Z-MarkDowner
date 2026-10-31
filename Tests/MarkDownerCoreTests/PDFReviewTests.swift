@@ -117,6 +117,37 @@ final class PDFReviewTests: XCTestCase {
         XCTAssertEqual(ranges[1], NSRange(location: 17, length: 6))
     }
 
+    func testCommentWithBlankLineStaysOneMark() {
+        let c = ReviewComment(id: "p0-0", page: 0, author: "A", kind: .highlight, quotedText: "bugs",
+                              comment: "First.\n\nSecond.", suggestion: .insertAfter(target: "bugs", text: " a\n\nb"))
+        XCTAssertEqual(PDFTextExtractor.reviewMark(for: c, quote: "bugs"), "{==bugs==}{>>A: First. Second.<<}{++ a b++}")
+    }
+
+    func testRangesStayOnOneLineAndOutsideSpans() {
+        let list = "- a\n- b\n"
+        XCTAssertEqual(PDFTextExtractor.insertionRanges(for: [NSRange(location: 2, length: 6)], in: list), [NSRange(location: 2, length: 1)])
+        let bold = "x **bugs** y"
+        XCTAssertEqual(PDFTextExtractor.insertionRanges(for: [NSRange(location: 4, length: 3)], in: bold), [NSRange(location: 2, length: 8)])
+        XCTAssertEqual(PDFTextExtractor.insertionRanges(for: [NSRange(location: 0, length: 6)], in: bold), [NSRange(location: 0, length: 10)])
+        let code = "use `foo bar` now"
+        XCTAssertEqual(PDFTextExtractor.insertionRanges(for: [NSRange(location: 8, length: 0)], in: code), [NSRange(location: 13, length: 0)])
+    }
+
+    func testReviewMarksParseBack() {
+        let source = "# Title\n\n- first bugs item\n- second **bold words** item\n\nPlain text here.\n"
+        let comments = [
+            ReviewComment(id: "a", page: 0, author: "R", kind: .highlight, quotedText: "bugs item second bold", comment: "One.\n\nTwo."),
+            ReviewComment(id: "b", page: 0, author: "R", kind: .highlight, quotedText: "bold", comment: "Bold one."),
+        ]
+        let marked = PDFTextExtractor.addingReviewMarks(from: comments, to: source)
+        let blocks = MarkdownParser.parseBlocks(marked)
+        let text = "\(blocks)"
+        XCTAssertTrue(text.contains("highlight"), text)
+        XCTAssertTrue(text.contains("comment(\"R: Bold one.\")") || text.contains("comment(\"R: One. Two.\")"), text)
+        XCTAssertTrue(marked.contains("{==**bold words**==}"), marked)
+        XCTAssertTrue(marked.contains("{==bugs item==}{>>R: One. Two.<<}\n- second"), marked)
+    }
+
     func testCaretInsertsAfterPrecedingWord() {
         let doc = SyntheticPDF.make(pages: [[body("Results show bugs in current tools for visualization.")]])
         let tools = SyntheticPDF.bounds(of: "tools", in: doc)

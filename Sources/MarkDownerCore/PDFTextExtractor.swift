@@ -646,7 +646,7 @@ extension PDFTextExtractor {
 
     /// The CriticMarkup for one comment around the text it marks (`quote`, empty at an insertion point).
     static func reviewMark(for comment: ReviewComment, quote: String) -> String {
-        let escaped = comment.comment.replacingOccurrences(of: "<<}", with: "<< }")
+        let escaped = singleLine(comment.comment).replacingOccurrences(of: "<<}", with: "<< }")
         let note = escaped.isEmpty ? "" : "{>>\(comment.author.isEmpty ? "" : comment.author + ": ")\(escaped)<<}"
         guard !quote.isEmpty else { return note }
         var mark: String
@@ -656,7 +656,7 @@ extension PDFTextExtractor {
         case .highlight, .underline, .squiggly:
             mark = "{==\(quote)==}" + note
             if case .insertAfter(_, let text)? = comment.suggestion, comment.kind == .highlight, !text.isEmpty {
-                mark += "{++\(text)++}"
+                mark += "{++\(singleLine(text))++}"
             }
         }
         return mark
@@ -682,11 +682,40 @@ extension PDFTextExtractor {
                 }
             }
             if range.length > 0 {
-                let paragraph = source.range(of: "\n\n", range: range)
-                if paragraph.location != NSNotFound { range.length = paragraph.location - range.location }
+                let lineBreak = source.rangeOfCharacter(from: .newlines, range: range)
+                if lineBreak.location != NSNotFound { range.length = lineBreak.location - range.location }
             }
-            return range
+            return snappedToSpans(range, in: markdown)
         }
+    }
+
+    private static let inlineSpan = try! NSRegularExpression(pattern: #"\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|`[^`\n]+`|~~[^~\n]+~~"#)
+
+    /// Widens `range` so that neither edge falls inside an emphasis, strike-through or code span.
+    private static func snappedToSpans(_ range: NSRange, in markdown: String) -> NSRange {
+        let source = markdown as NSString
+        let line = source.lineRange(for: NSRange(location: range.location, length: 0))
+        let spans = inlineSpan.matches(in: markdown, range: line).map(\.range)
+        var start = range.location, end = NSMaxRange(range)
+        var changed = true
+        while changed {
+            changed = false
+            for span in spans {
+                if start > span.location && start < NSMaxRange(span) {
+                    if range.length == 0 { start = NSMaxRange(span); end = start } else { start = span.location }
+                    changed = true
+                }
+                if end > span.location && end < NSMaxRange(span) && end > start {
+                    end = NSMaxRange(span)
+                    changed = true
+                }
+            }
+        }
+        return NSRange(location: start, length: end - start)
+    }
+
+    private static func singleLine(_ text: String) -> String {
+        text.replacingOccurrences(of: #"\s*[\r\n]+\s*"#, with: " ", options: .regularExpression)
     }
 
     private static func commentLine(_ comment: ReviewComment) -> String? {
