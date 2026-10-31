@@ -71,4 +71,6 @@ enum CoreStrings {
     static let notAZip = L("error.notZip", "The file is not a valid ZIP/DOCX package.")
     static func corruptZip(_ what: String) -> String { LF("error.corruptZip", "Damaged ZIP package (%@).", what) }
     static func unsupportedZipMethod(_ m: Int) -> String { LF("error.zipMethod", "Unsupported compression method: %d.", m) }
+    static let pdfLocked = L("pdf.locked", "The PDF is password-protected, so its text could not be read.")
+    static let pdfNoText = L("pdf.noText", "The PDF contains no extractable text.")
 }

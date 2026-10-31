@@ -189,6 +189,8 @@
 "menu.window" = "Window";
 "menu.zoom" = "Zoom";
 "panel.chooseImage" = "Choose images to insert";
+"pdf.locked" = "The PDF is password-protected, so its text could not be read.";
+"pdf.noText" = "The PDF contains no extractable text.";
 "placeholder.bold" = "bold text";
 "placeholder.caption" = "Caption";
 "placeholder.cell" = "Cell";

@@ -108,6 +108,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
                 <string>com.apple.rtfd</string>
                 <string>org.oasis-open.opendocument.text</string>
                 <string>public.html</string>
+                <string>com.adobe.pdf</string>
             </array>
             <key>NSDocumentClass</key><string>MarkdownDocument</string>
         </dict>

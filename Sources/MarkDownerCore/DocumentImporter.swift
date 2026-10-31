@@ -1,4 +1,5 @@
 import AppKit
+import PDFKit
 
 public enum ImportError: LocalizedError {
     case unsupportedFormat(String)
@@ -16,7 +17,7 @@ public enum ImportError: LocalizedError {
     }
 }
 
-/// Reads MD, TXT, RTF, DOC and DOCX files and turns them into Markdown text.
+/// Reads MD, TXT, RTF, DOC, DOCX and PDF files and turns them into Markdown text.
 public enum DocumentImporter {
 
     /// How tracked changes and comments in Word documents are imported.
@@ -31,7 +32,7 @@ public enum DocumentImporter {
 
     public static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn"]
     public static let plainTextExtensions: Set<String> = ["txt", "text"]
-    public static let richTextExtensions: Set<String> = ["rtf", "rtfd", "doc", "docx", "odt", "html", "htm"]
+    public static let richTextExtensions: Set<String> = ["rtf", "rtfd", "doc", "docx", "odt", "html", "htm", "pdf"]
 
     public static var supportedExtensions: Set<String> {
         markdownExtensions.union(plainTextExtensions).union(richTextExtensions)
@@ -45,6 +46,13 @@ public enum DocumentImporter {
                 throw ImportError.unreadable(url.lastPathComponent, underlying: error)
             }
             return decodeText(data)
+        }
+
+        if ext == "pdf" {
+            guard let document = PDFDocument(url: url) else {
+                throw ImportError.unreadable(url.lastPathComponent, underlying: nil)
+            }
+            return PDFTextExtractor.extract(document).markdown
         }
 
         if ext == "docx" {
@@ -448,7 +456,7 @@ public enum AttributedToMarkdown {
     }
 
     /// Escapes characters at the start of a line that would otherwise create a block construct.
-    private static func escapeLineStart(_ line: String) -> String {
+    static func escapeLineStart(_ line: String) -> String {
         if line.range(of: #"^(#{1,6}\s|>|[-+]\s|\d+[.)]\s|={3,}\s*$|-{3,}\s*$)"#, options: .regularExpression) != nil {
             if let first = line.first, first.isNumber {
                 // "1. " -> "1\. "

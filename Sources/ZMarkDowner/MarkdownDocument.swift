@@ -10,6 +10,7 @@ enum DocumentTypes {
     static let importOnly: Set<String> = [
         "public.rtf", "com.apple.rtfd", "com.microsoft.word.doc",
         "org.openxmlformats.wordprocessingml.document", "org.oasis-open.opendocument.text", "public.html",
+        "com.adobe.pdf",
     ]
 }
 
