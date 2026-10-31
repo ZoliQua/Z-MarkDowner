@@ -40,13 +40,20 @@ final class EditorTextView: NSTextView {
         window?.windowController?.document as? MarkdownDocument
     }
 
-    /// Markdown formatting and insert commands are disabled in LaTeX documents.
+    private var isLatex: Bool { markdownDocument?.sourceFormat == .latex }
+
+    /// Markdown formatting, insert and rich copy commands: disabled in LaTeX documents.
+    private static let markdownOnlySelectors = DocumentWindowController.formattingSelectors
+        .union(DocumentWindowController.readOnlySelectors)
+
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
-        if let action = item.action, DocumentWindowController.formattingSelectors.contains(action),
-           markdownDocument?.sourceFormat == .latex {
-            return false
-        }
+        if let action = item.action, isLatex, Self.markdownOnlySelectors.contains(action) { return false }
         return super.validateUserInterfaceItem(item)
+    }
+
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if let action = menuItem.action, isLatex, Self.markdownOnlySelectors.contains(action) { return false }
+        return super.validateMenuItem(menuItem)
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -310,7 +317,7 @@ final class EditorTextView: NSTextView {
     /// Continues lists and quotes when pressing Return; adds a table row at the end of a table row.
     override func insertNewline(_ sender: Any?) {
         let sel = selectedRange()
-        guard sel.length == 0 else { return super.insertNewline(sender) }
+        guard sel.length == 0, !isLatex else { return super.insertNewline(sender) }
         if handleTableNewline() { return }
         let lineRange = nsString.lineRange(for: NSRange(location: sel.location, length: 0))
         let lineToCaret = nsString.substring(with: NSRange(location: lineRange.location, length: sel.location - lineRange.location))
@@ -544,7 +551,7 @@ final class EditorTextView: NSTextView {
             ?? pb.data(forType: .tiff).flatMap({ NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) }) {
             if let path = ImageStore.store(data: data, ext: "png", suggestedName: "image",
                                            for: markdownDocument, window: window) {
-                replace(range, with: "![](\(path))")
+                replace(range, with: imageMarkup(path, alt: ""))
             }
             return true
         }
@@ -554,10 +561,17 @@ final class EditorTextView: NSTextView {
     func insertImageFiles(_ urls: [URL], at range: NSRange) {
         let refs = urls.compactMap { url -> String? in
             guard let path = ImageStore.reference(for: url, document: markdownDocument) else { return nil }
-            return "![\(url.deletingPathExtension().lastPathComponent)](\(path))"
+            return imageMarkup(path, alt: url.deletingPathExtension().lastPathComponent)
         }
         guard !refs.isEmpty else { return }
         replace(range, with: refs.joined(separator: "\n"))
+    }
+
+    /// Image reference for a stored image (`path` is relative and percent-encoded): Markdown image syntax,
+    /// or `\includegraphics` with the plain path in LaTeX documents.
+    private func imageMarkup(_ path: String, alt: String) -> String {
+        guard isLatex else { return "![\(alt)](\(path))" }
+        return "\\includegraphics[width=\\linewidth]{\(path.removingPercentEncoding ?? path)}"
     }
 
     /// Pastes rich text (e.g. copied from Word or a web page) converted to Markdown.

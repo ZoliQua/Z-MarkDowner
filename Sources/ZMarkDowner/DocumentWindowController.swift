@@ -457,7 +457,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
     /// Word goal of this document: front matter `goal:` / `word-goal:`, or one set in the statistics panel.
     var documentGoal: Int? {
         get {
-            let fm = MarkdownParser.frontMatter(of: editor.string)
+            let fm = isLatex ? [:] : MarkdownParser.frontMatter(of: editor.string)
             if let value = fm["goal"] ?? fm["word-goal"] ?? fm["wordgoal"], let n = Int(value.filter(\.isNumber)) { return n }
             return markdownDocument?.fileURL.flatMap { WritingGoals.shared.goal(for: $0) }
         }
@@ -727,6 +727,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         case #selector(toggleLiveFormatting(_:)):
             menuItem.state = Settings.shared.liveFormatting && !isLatex ? .on : .off
             return mode != .preview && !isLatex
+        case #selector(exportPDF(_:)), #selector(exportDOCX(_:)), #selector(exportHTML(_:)), #selector(exportEPUB(_:)),
+             #selector(EditorTextView.copyAsRichText(_:)):
+            return !isLatex
         case #selector(toggleNumberSections(_:)):
             menuItem.state = Settings.shared.numberSections ? .on : .off
         default: break
@@ -782,7 +785,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
     }
 
     private func runExport(type: UTType, ext: String, write: @escaping (URL) async throws -> Void) {
-        guard let window else { return }
+        guard let window, !isLatex else { return }
         commitEditing()
         let panel = NSSavePanel()
         panel.allowedContentTypes = [type]
@@ -813,7 +816,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     /// Prints the rendered document (same output as the PDF export).
     func printRendered() {
-        guard let window else { return }
+        guard let window, !isLatex else { return }
         commitEditing()
         let options = exportOptions()
         let markdown = editor.string

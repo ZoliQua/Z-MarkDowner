@@ -139,6 +139,17 @@ final class MarkdownDocument: NSDocument {
         windowController?.printRendered()
     }
 
+    /// Printing renders Markdown, so it is disabled for LaTeX sources.
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(printDocument(_:)), sourceFormat == .latex { return false }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(printDocument(_:)), sourceFormat == .latex { return false }
+        return super.validateMenuItem(menuItem)
+    }
+
     override var fileURL: URL? {
         didSet {
             if oldValue != fileURL { windowController?.documentLocationChanged() }

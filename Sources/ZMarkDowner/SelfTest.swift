@@ -662,6 +662,46 @@ final class SelfTest {
             try await doc.save(to: url, ofType: doc.fileType ?? DocumentTypes.latex, for: .saveOperation)
             let saved = try String(contentsOf: url, encoding: .utf8)
             check(doc.fileURL == url && saved == source + "More $x^2$ text.\n", "LaTeX: edit and save keep .tex and the exact content")
+
+            // Markdown-only features stay out of LaTeX windows
+            func enabled(_ action: Selector) -> Bool {
+                let item = NSMenuItem(title: "", action: action, keyEquivalent: "")
+                // The window's responder chain from the editor, then the window delegate and the document (as AppKit searches)
+                var chain: [AnyObject] = []
+                var responder: NSResponder? = editor
+                while let r = responder { chain.append(r); responder = r.nextResponder }
+                chain += [window.delegate, doc].compactMap { $0 as AnyObject? }
+                guard let target = chain.first(where: { $0.responds(to: action) }) else { return false }
+                if let validator = target as? NSMenuItemValidation { return validator.validateMenuItem(item) }
+                return (target as? NSUserInterfaceValidations)?.validateUserInterfaceItem(item) ?? true
+            }
+            let markdownOnly: [Selector] = [
+                #selector(DocumentWindowController.exportPDF(_:)), #selector(DocumentWindowController.exportDOCX(_:)),
+                #selector(DocumentWindowController.exportHTML(_:)), #selector(DocumentWindowController.exportEPUB(_:)),
+                #selector(EditorTextView.copyAsRichText(_:)), #selector(NSDocument.printDocument(_:)),
+                #selector(EditorTextView.formatBold(_:)),
+            ]
+            check(enabled(#selector(NSText.selectAll(_:))) && !markdownOnly.contains(where: enabled),
+                  "LaTeX: export, Copy as Formatted Text, Print and formatting menu items disabled (still enabled: \(markdownOnly.filter(enabled).map(NSStringFromSelector)))")
+            editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+            editor.insertText("- item", replacementRange: editor.selectedRange())
+            editor.insertNewline(nil)
+            check(editor.string.hasSuffix("- item\n"), "LaTeX: Return inserts a plain newline (no list continuation)")
+            editor.insertText("See {#fig:one} @", replacementRange: editor.selectedRange())
+            check(wc.citationCandidates().isEmpty, "LaTeX: no @ citation completion")
+            let image = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 4, pixelsHigh: 4, bitsPerSample: 8, samplesPerPixel: 4,
+                                         hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            let pb = NSPasteboard(name: .init("zmd-selftest-latex"))
+            pb.clearContents()
+            pb.setData(image.representation(using: .png, properties: [:])!, forType: .png)
+            editor.insertText("\n", replacementRange: editor.selectedRange())
+            _ = editor.handleFilesOrImages(from: pb, at: editor.selectedRange())
+            let graphic = editor.string.range(of: #"\\includegraphics\[width=\\linewidth\]\{images/[^}]+\.png\}"#,
+                                              options: .regularExpression).map { String(editor.string[$0]) }
+            let graphicFile = graphic.map { dir.appendingPathComponent(String($0.split(separator: "{").last!.dropLast())) }
+            check(graphicFile.map { FileManager.default.fileExists(atPath: $0.path) } ?? false,
+                  "LaTeX: pasted image stored and inserted as \\includegraphics: \(graphic ?? "-")")
+            doc.updateChangeCount(.changeCleared)
             doc.close()
         } catch {
             check(false, "LaTeX: \(error.localizedDescription)")

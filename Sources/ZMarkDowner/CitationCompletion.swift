@@ -51,6 +51,7 @@ extension DocumentWindowController {
 
     /// Bibliography keys and the document's cross-reference labels.
     func citationCandidates() -> [String] {
+        guard !isLatex else { return [] }
         let text = editor.string
         var labels: [String] = []
         if let re = try? NSRegularExpression(pattern: #"\{#((?:fig|tbl|eq|sec):[^\s}]+)"#) {
