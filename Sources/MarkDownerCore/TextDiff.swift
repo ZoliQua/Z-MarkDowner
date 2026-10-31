@@ -98,23 +98,30 @@ public enum TextDiff {
     /// Splits into words (letters, digits, underscore), whitespace runs and single punctuation characters.
     static func tokens(_ s: String) -> [String] {
         var result: [String] = []
-        var current = String.UnicodeScalarView()
+        let view = s.unicodeScalars
+        var start = view.startIndex
         var currentClass = 0
-        for u in s.unicodeScalars {
-            let c = scalarClass(u)
-            if c != currentClass || c == 3 {
-                if !current.isEmpty { result.append(String(current)) }
-                current = String.UnicodeScalarView()
-                currentClass = c
+        var idx = view.startIndex
+        while idx != view.endIndex {
+            let c = scalarClass(view[idx])
+            if idx != start, c != currentClass || c == 3 {
+                result.append(String(view[start..<idx]))
+                start = idx
             }
-            current.append(u)
+            currentClass = c
+            idx = view.index(after: idx)
         }
-        if !current.isEmpty { result.append(String(current)) }
+        if start != view.endIndex { result.append(String(view[start..<view.endIndex])) }
         return result
     }
 
     private static func scalarClass(_ u: Unicode.Scalar) -> Int {
-        if u == "_" { return 1 }
+        let v = u.value
+        if v < 128 {
+            if (v >= 97 && v <= 122) || (v >= 65 && v <= 90) || (v >= 48 && v <= 57) || v == 95 { return 1 }
+            if v == 32 || (v >= 9 && v <= 13) { return 2 }
+            return 3
+        }
         let p = u.properties
         if p.isAlphabetic || p.numericType != nil { return 1 }
         if p.isWhitespace { return 2 }
@@ -253,14 +260,18 @@ public enum TextDiff {
         return Array(repeating: .equal, count: prefix) + mid + Array(repeating: .equal, count: suffix)
     }
 
+    /// Bounds trace memory (about 4 bytes x D^2); beyond it a region is reported as one delete plus one insert.
+    private static let maxEditDistance = 2000
+
     private static func myers(_ a: [Int], _ b: [Int]) -> [Op] {
         let n = a.count, m = b.count
         if n == 0 { return Array(repeating: .insert, count: m) }
         if m == 0 { return Array(repeating: .delete, count: n) }
-        let maxD = n + m
+        let maxD = min(n + m, maxEditDistance)
         let offset = maxD + 1
-        var v = [Int](repeating: 0, count: 2 * maxD + 3)
-        var trace: [[Int]] = []
+        var v = [Int32](repeating: 0, count: 2 * maxD + 3)
+        var trace: [Int32] = []
+        trace.reserveCapacity(1 << 16)
         var found = -1
         a.withUnsafeBufferPointer { ap in
             b.withUnsafeBufferPointer { bp in
@@ -270,28 +281,29 @@ public enum TextDiff {
                         while k <= d {
                             var xx: Int
                             if k == -d || (k != d && vp[offset + k - 1] < vp[offset + k + 1]) {
-                                xx = vp[offset + k + 1]
+                                xx = Int(vp[offset + k + 1])
                             } else {
-                                xx = vp[offset + k - 1] + 1
+                                xx = Int(vp[offset + k - 1]) + 1
                             }
                             var yy = xx - k
                             while xx < n, yy < m, ap[xx] == bp[yy] { xx += 1; yy += 1 }
-                            vp[offset + k] = xx
+                            vp[offset + k] = Int32(truncatingIfNeeded: xx)
                             if xx >= n && yy >= m { found = d; return }
                             k += 2
                         }
-                        trace.append(Array(UnsafeBufferPointer(rebasing: vp[(offset - d)...(offset + d)])))
+                        trace.append(contentsOf: UnsafeBufferPointer(rebasing: vp[(offset - d)...(offset + d)]))
                     }
                 }
             }
         }
+        if found < 0 { return Array(repeating: .delete, count: n) + Array(repeating: .insert, count: m) }
         var ops: [Op] = []
         var xx = n, yy = m
         var d = found
         while d > 0 {
-            let prev = trace[d - 1]
+            let base = (d - 1) * (d - 1)
             let k = xx - yy
-            func at(_ kk: Int) -> Int { prev[kk + d - 1] }
+            func at(_ kk: Int) -> Int { Int(trace[base + kk + d - 1]) }
             let prevK = (k == -d || (k != d && at(k - 1) < at(k + 1))) ? k + 1 : k - 1
             let prevX = at(prevK)
             let prevY = prevX - prevK

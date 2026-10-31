@@ -95,4 +95,31 @@ final class TextDiffTests: XCTestCase {
             XCTAssertEqual(r.segments.filter { $0.kind != .delete }.map(\.text).joined(), n)
         }
     }
+
+    func testPerformanceFullyRewrittenMultiline() {
+        var seed: UInt64 = 777
+        func next() -> Int {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Int(seed >> 33)
+        }
+        func make(_ letters: String) -> String {
+            let chars = Array(letters)
+            var out = ""
+            var count = 0
+            while count < 200_000 {
+                let len = 2 + next() % 7
+                out += String((0..<len).map { _ in chars[next() % chars.count] })
+                count += len + 1
+                out += next() % 10 == 0 ? "\n" : " "
+            }
+            return out
+        }
+        let old = make("abcdefghijklm")
+        let new = make("nopqrstuvwxyz")
+        let start = Date()
+        let r = TextDiff.compare(old, new)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2.0)
+        XCTAssertEqual(r.segments.filter { $0.kind != .insert }.map(\.text).joined(), old)
+        XCTAssertEqual(r.segments.filter { $0.kind != .delete }.map(\.text).joined(), new)
+    }
 }
