@@ -63,3 +63,29 @@ public struct ReviewComment: Codable, Equatable, Identifiable {
         self.reply = reply
     }
 }
+
+extension ReviewComment {
+    private enum CodingKeys: String, CodingKey {
+        case id, page, author, date, kind, quotedText, contextBefore, contextAfter, comment, replies
+        case suggestion, suggestionIsAI, status, reply
+    }
+
+    /// Decodes tolerantly: only `id` is required, so sidecars written by older or newer versions still load.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(id: try c.decode(String.self, forKey: .id),
+                  page: try c.decodeIfPresent(Int.self, forKey: .page) ?? 0,
+                  author: try c.decodeIfPresent(String.self, forKey: .author) ?? "",
+                  date: try c.decodeIfPresent(Date.self, forKey: .date),
+                  kind: try c.decodeIfPresent(AnnotationKind.self, forKey: .kind) ?? .highlight,
+                  quotedText: try c.decodeIfPresent(String.self, forKey: .quotedText) ?? "",
+                  contextBefore: try c.decodeIfPresent(String.self, forKey: .contextBefore) ?? "",
+                  contextAfter: try c.decodeIfPresent(String.self, forKey: .contextAfter) ?? "",
+                  comment: try c.decodeIfPresent(String.self, forKey: .comment) ?? "",
+                  replies: try c.decodeIfPresent([String].self, forKey: .replies) ?? [],
+                  suggestion: try c.decodeIfPresent(Suggestion.self, forKey: .suggestion),
+                  suggestionIsAI: try c.decodeIfPresent(Bool.self, forKey: .suggestionIsAI) ?? false,
+                  status: try c.decodeIfPresent(ReviewStatus.self, forKey: .status) ?? .open,
+                  reply: try c.decodeIfPresent(String.self, forKey: .reply) ?? "")
+    }
+}

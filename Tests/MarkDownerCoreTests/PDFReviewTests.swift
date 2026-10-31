@@ -133,6 +133,36 @@ final class PDFReviewTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode([ReviewComment].self, from: data), [comment])
     }
 
+    func testReplyThreadingSkipsMismatchedPairs() {
+        // PDFKit drops the Text annotation without /Rect (object 7), so ranking by subtype alone would pair
+        // the reply (object 8) with the note (object 9) and swallow the note as a reply.
+        let doc = SyntheticPDF.makeRaw(text: "Results show bugs in current tools.", annotations: [
+            "<< /Type /Annot /Subtype /Highlight /Rect [140 697 164 708] /QuadPoints [140 708 164 708 140 697 164 697] /Contents (Too vague.) /T (Reviewer) >>",
+            "<< /Type /Annot /Subtype /Text /Contents (No rect.) >>",
+            "<< /Type /Annot /Subtype /Text /Rect [500 700 520 720] /Contents (I agree.) /T (Author) /IRT 6 0 R >>",
+            "<< /Type /Annot /Subtype /Text /Rect [72 400 92 420] /Contents (Separate note.) /T (Reviewer) >>",
+        ])
+        XCTAssertEqual(doc.page(at: 0)?.annotations.filter { $0.type == "Text" }.count, 2, "fixture assumption: PDFKit drops the Rect-less note")
+        let comments = PDFReviewExtractor.comments(from: doc)
+        XCTAssertTrue(comments.contains { $0.comment == "Separate note." }, "\(comments)")
+        XCTAssertFalse(comments.contains { $0.replies.contains("Separate note.") }, "\(comments)")
+        XCTAssertEqual(comments.first { $0.kind == .highlight }?.replies.contains("Separate note."), false)
+    }
+
+    func testCommentDecodingIsTolerant() throws {
+        let minimal = try JSONDecoder().decode(ReviewComment.self, from: Data(#"{"id":"p0-0"}"#.utf8))
+        XCTAssertEqual(minimal, ReviewComment(id: "p0-0", page: 0, kind: .highlight))
+        XCTAssertEqual(minimal.status, .open)
+        XCTAssertEqual(minimal.replies, [])
+        XCTAssertNil(minimal.suggestion)
+        let extra = try JSONDecoder().decode(ReviewComment.self, from: Data(#"{"id":"p1-2","page":1,"status":"done","reply":"Fixed.","futureField":{"x":1}}"#.utf8))
+        XCTAssertEqual(extra.id, "p1-2")
+        XCTAssertEqual(extra.page, 1)
+        XCTAssertEqual(extra.status, .done)
+        XCTAssertEqual(extra.reply, "Fixed.")
+        XCTAssertThrowsError(try JSONDecoder().decode(ReviewComment.self, from: Data(#"{"page":1}"#.utf8)))
+    }
+
     // MARK: Instructions
 
     func testInstructionPatterns() {

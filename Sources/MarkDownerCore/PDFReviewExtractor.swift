@@ -93,7 +93,8 @@ public enum PDFReviewExtractor {
     /// replies join the thread of the comment they finally answer.
     ///
     /// PDFKit does not expose `/IRT`, so the page's `/Annots` array is read with CoreGraphics and matched
-    /// to PDFKit's annotations by subtype and order (PDFKit keeps the array's order).
+    /// to PDFKit's annotations by subtype and order (PDFKit keeps the array's order). Each pair must also
+    /// agree on Contents and position; a reply whose pair disagrees stays a comment of its own.
     private static func replyThreads(of annotations: [PDFAnnotation], pageIndex: Int,
                                      document: PDFDocument) -> (parent: [Int: Int], replies: [Int: [Int]]) {
         guard let dictionary = document.documentRef?.page(at: pageIndex + 1)?.dictionary else { return ([:], [:]) }
@@ -111,7 +112,8 @@ public enum PDFReviewExtractor {
             let subtype = raw[index].subtype
             let rank = raw[..<index].filter { $0.subtype == subtype }.count
             let candidates = annotations.indices.filter { annotations[$0].type == subtype }
-            return rank < candidates.count ? candidates[rank] : nil
+            guard rank < candidates.count, isSame(raw[index].dictionary, annotations[candidates[rank]]) else { return nil }
+            return candidates[rank]
         }
         var direct: [Int: Int] = [:]
         for (index, entry) in raw.enumerated() {
@@ -132,6 +134,24 @@ public enum PDFReviewExtractor {
             replies[root, default: []].append(child)
         }
         return (parent, replies)
+    }
+
+    /// Whether a raw annotation dictionary is the PDFKit annotation paired with it: the same Contents and
+    /// left edge. PDFKit normalizes some sizes (sticky notes), so only `/Rect`'s left edge is compared.
+    private static func isSame(_ dictionary: CGPDFDictionaryRef, _ annotation: PDFAnnotation) -> Bool {
+        var rect: CGPDFArrayRef?
+        var left: CGPDFReal = 0, right: CGPDFReal = 0
+        guard CGPDFDictionaryGetArray(dictionary, "Rect", &rect), let rect,
+              CGPDFArrayGetNumber(rect, 0, &left), CGPDFArrayGetNumber(rect, 2, &right),
+              abs(min(left, right) - annotation.bounds.minX) <= 1 else { return false }
+        var string: CGPDFStringRef?
+        var contents = ""
+        if CGPDFDictionaryGetString(dictionary, "Contents", &string), let string,
+           let text = CGPDFStringCopyTextString(string) {
+            contents = text as String
+        }
+        let trimmed = { (text: String) in text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return trimmed(contents) == trimmed(annotation.contents ?? "")
     }
 
     // MARK: Dates
