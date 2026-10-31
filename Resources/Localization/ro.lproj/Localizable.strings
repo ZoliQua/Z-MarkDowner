@@ -81,7 +81,7 @@
 "menu.hide" = "Ascunde %@";
 "menu.hideOthers" = "Ascunde-le pe celelalte";
 "menu.hideSidebar" = "Ascunde bara laterală";
-"menu.import" = "Importă (DOCX, DOC, RTF, TXT, MD)…";
+"menu.importPDF" = "Importă (DOCX, DOC, RTF, PDF, TXT, MD)…";
 "menu.inlineCode" = "Cod în linie";
 "menu.inlineMath" = "Formulă în linie";
 "menu.insertCodeBlock" = "Inserează bloc de cod";

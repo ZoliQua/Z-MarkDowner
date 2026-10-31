@@ -81,7 +81,7 @@
 "menu.hide" = "Skrýt %@";
 "menu.hideOthers" = "Skrýt ostatní";
 "menu.hideSidebar" = "Skrýt boční panel";
-"menu.import" = "Importovat (DOCX, DOC, RTF, TXT, MD)…";
+"menu.importPDF" = "Importovat (DOCX, DOC, RTF, PDF, TXT, MD)…";
 "menu.inlineCode" = "Kód v řádku";
 "menu.inlineMath" = "Vzorec v řádku";
 "menu.insertCodeBlock" = "Vložit blok kódu";

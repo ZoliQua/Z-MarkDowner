@@ -81,7 +81,7 @@
 "menu.hide" = "Ocultar %@";
 "menu.hideOthers" = "Ocultar Outros";
 "menu.hideSidebar" = "Ocultar Barra Lateral";
-"menu.import" = "Importar (DOCX, DOC, RTF, TXT, MD)…";
+"menu.importPDF" = "Importar (DOCX, DOC, RTF, PDF, TXT, MD)…";
 "menu.inlineCode" = "Código em Linha";
 "menu.inlineMath" = "Fórmula em Linha";
 "menu.insertCodeBlock" = "Inserir Bloco de Código";

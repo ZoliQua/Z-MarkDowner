@@ -751,7 +751,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         case #selector(compareWithSaved(_:)), #selector(compareWithVersion(_:)):
             return markdownDocument?.fileURL != nil
         case #selector(compareWithClipboard(_:)):
-            return NSPasteboard.general.string(forType: .string) != nil
+            return NSPasteboard.general.availableType(from: [.string]) != nil
         case #selector(exportResponseLetter(_:)):
             return review.session != nil
         case #selector(showComments(_:)):

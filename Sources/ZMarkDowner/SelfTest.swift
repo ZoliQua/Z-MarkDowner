@@ -885,6 +885,17 @@ final class SelfTest {
                   && doc.text.contains("bugs") && doc.text.contains("{==bugs==}") == marks
                   && doc.windowController?.editor.string == doc.text,
                   "PDF: opens as an edited untitled Markdown document (\(ticks) timer ticks while reading)")
+            if let wc = doc.windowController {
+                let compareItem = NSMenuItem(title: "", action: #selector(DocumentWindowController.compareWithClipboard(_:)), keyEquivalent: "")
+                let pasteboard = NSPasteboard.general
+                let saved = pasteboard.string(forType: .string)
+                pasteboard.clearContents()
+                let withoutText = wc.validateMenuItem(compareItem)
+                pasteboard.setString("clipboard text", forType: .string)
+                check(!withoutText && wc.validateMenuItem(compareItem), "Compare with Clipboard is enabled only when the clipboard holds text")
+                pasteboard.clearContents()
+                if let saved { pasteboard.setString(saved, forType: .string) }
+            }
             doc.updateChangeCount(.changeCleared)
             doc.close()
         } else {
@@ -907,6 +918,11 @@ final class SelfTest {
         let compared = (try? await DiffWindowController.text(ofFileAt: pdfURL)) ?? ""
         check(compared.contains("bugs") && !compared.contains("{==") && !compared.contains("{--") && !compared.contains("{>>"),
               "Compare: PDF annotations are not part of the compared text")
+
+        let importItem = NSApp.mainMenu?.items.compactMap(\.submenu).flatMap(\.items)
+            .first { $0.action == #selector(AppDelegate.importDocument(_:)) }
+        check(importItem?.title == L("menu.importPDF", "Import (DOCX, DOC, RTF, PDF, TXT, MD)…") && importItem?.title.contains("PDF") == true,
+              "File ▸ Import names PDF: \(importItem?.title ?? "-")")
 
         let folder = dir.appendingPathComponent("routing", isDirectory: true)
         try? FileManager.default.removeItem(at: folder)

@@ -81,7 +81,7 @@
 "menu.hide" = "%@ Uygulamasını Gizle";
 "menu.hideOthers" = "Diğerlerini Gizle";
 "menu.hideSidebar" = "Kenar Çubuğunu Gizle";
-"menu.import" = "İçe Aktar (DOCX, DOC, RTF, TXT, MD)…";
+"menu.importPDF" = "İçe Aktar (DOCX, DOC, RTF, PDF, TXT, MD)…";
 "menu.inlineCode" = "Satır İçi Kod";
 "menu.inlineMath" = "Satır İçi Formül";
 "menu.insertCodeBlock" = "Kod Bloku Ekle";

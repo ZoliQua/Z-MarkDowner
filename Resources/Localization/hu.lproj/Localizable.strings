@@ -81,7 +81,7 @@
 "menu.hide" = "%@ elrejtése";
 "menu.hideOthers" = "Többi elrejtése";
 "menu.hideSidebar" = "Oldalsáv elrejtése";
-"menu.import" = "Importálás (DOCX, DOC, RTF, TXT, MD)…";
+"menu.importPDF" = "Importálás (DOCX, DOC, RTF, PDF, TXT, MD)…";
 "menu.inlineCode" = "Szövegközi kód";
 "menu.inlineMath" = "Szövegközi képlet";
 "menu.insertCodeBlock" = "Kódblokk beszúrása";

@@ -145,7 +145,7 @@ enum MainMenu {
         let recent = NSMenu(title: L("menu.openRecent", "Open Recent"))
         recent.addItem(withTitle: L("menu.clearRecent", "Clear Menu"), action: #selector(NSDocumentController.clearRecentDocuments(_:)), keyEquivalent: "")
         file.addItem(withTitle: L("menu.openRecent", "Open Recent"), action: nil, keyEquivalent: "").submenu = recent
-        file.addItem(item(L("menu.import", "Import (DOCX, DOC, RTF, TXT, MD)…"), #selector(AppDelegate.importDocument(_:)), "i", [.command, .shift]))
+        file.addItem(item(L("menu.importPDF", "Import (DOCX, DOC, RTF, PDF, TXT, MD)…"), #selector(AppDelegate.importDocument(_:)), "i", [.command, .shift]))
         file.addItem(withTitle: L("menu.batch", "Batch Convert…"), action: #selector(AppDelegate.showBatchConvert(_:)), keyEquivalent: "")
         file.addItem(.separator())
         file.addItem(withTitle: L("menu.compareDocuments", "Compare Documents…"), action: #selector(AppDelegate.compareDocuments(_:)), keyEquivalent: "")

@@ -81,7 +81,7 @@
 "menu.hide" = "%@ ausblenden";
 "menu.hideOthers" = "Andere ausblenden";
 "menu.hideSidebar" = "Seitenleiste ausblenden";
-"menu.import" = "Importieren (DOCX, DOC, RTF, TXT, MD) …";
+"menu.importPDF" = "Importieren (DOCX, DOC, RTF, PDF, TXT, MD) …";
 "menu.inlineCode" = "Inline-Code";
 "menu.inlineMath" = "Inline-Formel";
 "menu.insertCodeBlock" = "Codeblock einfügen";

@@ -81,7 +81,7 @@
 "menu.hide" = "Скрыть %@";
 "menu.hideOthers" = "Скрыть остальные";
 "menu.hideSidebar" = "Скрыть боковую панель";
-"menu.import" = "Импорт (DOCX, DOC, RTF, TXT, MD)…";
+"menu.importPDF" = "Импорт (DOCX, DOC, RTF, PDF, TXT, MD)…";
 "menu.inlineCode" = "Встроенный код";
 "menu.inlineMath" = "Встроенная формула";
 "menu.insertCodeBlock" = "Вставить блок кода";
