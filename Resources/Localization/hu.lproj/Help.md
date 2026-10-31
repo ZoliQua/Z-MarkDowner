@@ -106,7 +106,15 @@ A Word-dokumentumok követett változásai és megjegyzései jelölésként ker�
 
 A **Nézet ▸ Élő formázás** (⌥⌘L) elrejti a Markdown-jelölést, kivéve a szerkesztett sort. Az állapotsor szószámára kattintva statisztikát, olvasási időt és írási célokat látsz. Az oldalsáv **Keresés** lapja egy mappa összes Markdown- és szövegfájljában keres és cserél (⌥⇧⌘F).
 
+## PDF-import, bírálói megjegyzések és verziók összehasonlítása
+
+A **Fájl ▸ Megnyitás** (⌘O) PDF-et is megnyit új Markdown-dokumentumként: a bekezdések, címsorok és listák helyreállnak, a sorszámok, élőfejek és oldalszámok eltűnnek, a szkennelt oldalakat pedig OCR olvassa be. A PDF megjegyzései és jelölései véleményezési jelölésekké válnak. A LaTeX-források (`.tex`) változatlanul, szerkeszthetően nyílnak meg.
+
+A **Fájl ▸ Bírálói megjegyzések importálása PDF-ből…** beolvassa egy véleményezett PDF megjegyzéseit, és mindegyiket megkeresi az általad szerkesztett forrásban – Markdownban vagy LaTeX-ben, a `\input` paranccsal beemelt fájlokat is beleértve. Előbb mentsd el a forrásfájlt: a bírálat mellette tárolódik (`<fájl>.review.json`). Az oldalsáv **Megjegyzések** lapja (**Nézet ▸ Megjegyzések**) sorolja fel őket; egy megjegyzésre kattintva kijelölődik a hozzá tartozó szöveg. Az egyszerű utasításokból – például `change "X" to "Y"`, `delete` vagy `add after: "Z"` – javaslatok lesznek, amelyeket egyenként vagy az **Összes alkalmazása** gombbal alkalmazhatsz (mindkettő visszavonható); a többit késznek jelölheted, elutasíthatod vagy válaszolhatsz rájuk. A **Beszúrás jelölésként** egy Markdown-forrás megjegyzéseit véleményezési jelölésekké alakítja, a **Fájl ▸ Válasz exportálása a bírálóknak…** pedig Markdown- vagy Word-formátumú válaszlevelet ír. macOS 26-on, Apple Intelligence mellett a **Módosítás javaslata (AI)** a Maceden javasol módosítást (bekapcsolás: Beállítások ▸ Írás); nélküled semmi sem kerül alkalmazásra.
+
+A **Fájl ▸ Dokumentumok összehasonlítása…** két fájlt hasonlít össze (Markdown, szöveg, Word, PDF …); a **Fájl ▸ Összehasonlítás ezzel** almenü a nyitott dokumentumot veti össze ezekkel: **Legutóbb mentett verzió** (amikor utoljára te magad mentetted), **Korábbi verzió…** vagy **Vágólap**. A változásokat **Egymás mellett** vagy **Egybefűzve** láthatod, figyelmen kívül hagyhatod a szóközöket, a kis- és nagybetűket vagy a formázást (a formázás csak a képernyőn látható összehasonlítást befolyásolja), a változások között pedig a ⌘↑ / ⌘↓ billentyűkkel ugorhatsz. A **Megnyitás jelölésekkel** elfogadható vagy elvethető változásokká alakítja az eltéréseket; az **Exportálás Wordbe követett változásokkal…** Word-dokumentumként menti őket.
+
 ---
 
 **Exportálás:** Fájl ▸ Exportálás ▸ PDF (⇧⌘E), Word (⇧⌘D), HTML vagy EPUB.
-**Importálás:** Fájl ▸ Megnyitás (⌘O) – DOCX, DOC, RTF, TXT és MD fájlok.
+**Importálás:** Fájl ▸ Megnyitás (⌘O) – DOCX, DOC, RTF, PDF, TXT és MD fájlok.

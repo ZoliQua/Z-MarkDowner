@@ -106,7 +106,15 @@ Sledované změny a komentáře z dokumentů Wordu se importují jako revizní z
 
 **Zobrazení ▸ Živé formátování** (⌥⌘L) skryje značky Markdownu kromě řádku, který právě upravujete. Klepnutím na počet slov ve stavovém řádku zobrazíte statistiku, dobu čtení a cíle psaní. Karta **Hledání** v bočním panelu vyhledává a nahrazuje ve všech souborech Markdown a textových souborech složky (⌥⇧⌘F).
 
+## Import PDF, komentáře recenzenta a porovnávání verzí
+
+**Soubor ▸ Otevřít** (⌘O) otevře i PDF jako nový dokument Markdown: odstavce, nadpisy a seznamy se obnoví, čísla řádků, záhlaví a čísla stránek se odstraní a naskenované stránky se přečtou pomocí OCR. Komentáře a značky v PDF se změní na revizní značky. Zdroje LaTeX (`.tex`) se otevřou k úpravám beze změny.
+
+**Soubor ▸ Importovat komentáře recenzenta z PDF…** načte komentáře z recenzovaného PDF a každý najde ve zdroji, který upravujete – v Markdownu nebo LaTeXu včetně souborů vložených příkazem `\input`. Nejprve uložte zdrojový soubor: recenze se ukládá vedle něj (`<soubor>.review.json`). Karta **Komentáře** bočního panelu (**Zobrazení ▸ Komentáře**) je zobrazí; kliknutím na komentář se vybere jeho text. Jednoduché pokyny jako `change "X" to "Y"`, `delete` nebo `add after: "Z"` se změní na návrhy, které můžete použít jednotlivě nebo tlačítkem **Použít vše** (obojí lze vrátit); ostatní můžete označit jako vyřízené, odmítnout nebo na ně odpovědět. **Vložit jako revizní značky** změní komentáře zdroje Markdown na revizní značky a **Soubor ▸ Exportovat odpověď recenzentům…** vytvoří dopis s odpovědí ve formátu Markdown nebo Word. V systému macOS 26 s Apple Intelligence navrhne **Navrhnout úpravu (AI)** úpravu přímo na vašem Macu (zapíná se v Nastavení ▸ Psaní); bez vás se nic nepoužije.
+
+**Soubor ▸ Porovnat dokumenty…** porovná dva soubory (Markdown, text, Word, PDF …); **Soubor ▸ Porovnat s** porovná otevřený dokument s položkou **Poslední uložená verze** (kdy jste ho naposledy sami uložili), **Starší verze…** nebo **Schránka**. Změny zobrazte **Vedle sebe** nebo **V textu**, ignorujte mezery, velikost písmen nebo formátování (formátování ovlivňuje jen porovnání na obrazovce) a mezi změnami přecházejte pomocí ⌘↑ / ⌘↓. **Otevřít s revizními značkami** změní rozdíly na změny, které můžete přijmout nebo odmítnout; **Exportovat jako Word se sledováním změn…** je uloží jako dokument Wordu.
+
 ---
 
 **Export:** Soubor ▸ Exportovat ▸ PDF (⇧⌘E), Word (⇧⌘D), HTML nebo EPUB.
-**Import:** Soubor ▸ Otevřít (⌘O) – soubory DOCX, DOC, RTF, TXT a MD.
+**Import:** Soubor ▸ Otevřít (⌘O) – soubory DOCX, DOC, RTF, PDF, TXT a MD.

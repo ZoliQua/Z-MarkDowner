@@ -106,7 +106,15 @@ Word belgelerindeki izlenen değişiklikler ve yorumlar gözden geçirme işaret
 
 **Görüntü ▸ Canlı Biçimlendirme** (⌥⌘L), düzenlediğiniz satır dışında Markdown işaretlemesini gizler. İstatistikler, okuma süresi ve yazma hedefleri için durum çubuğundaki kelime sayısını tıklayın. Kenar çubuğundaki **Ara** sekmesi, bir klasördeki tüm Markdown ve metin dosyalarında arama yapar ve değiştirir (⌥⇧⌘F).
 
+## PDF içe aktarma, hakem yorumları ve sürümleri karşılaştırma
+
+**Dosya ▸ Aç** (⌘O) bir PDF’i de yeni bir Markdown belgesi olarak açar: paragraflar, başlıklar ve listeler yeniden oluşturulur, satır numaraları, sayfa üst bilgileri ve sayfa numaraları kaldırılır, taranmış sayfalar OCR ile okunur. PDF’teki yorumlar ve işaretlemeler gözden geçirme işaretlerine dönüşür. LaTeX kaynakları (`.tex`) olduğu gibi düzenlenmek üzere açılır.
+
+**Dosya ▸ Hakem Yorumlarını PDF’ten İçe Aktar…** hakem yorumlu bir PDF’in yorumlarını okur ve her birini düzenlediğiniz kaynakta bulur – Markdown veya LaTeX, `\input` ile eklenen dosyalar dahil. Önce kaynak dosyayı kaydedin: değerlendirme onun yanında saklanır (`<dosya>.review.json`). Kenar çubuğunun **Yorumlar** sekmesi (**Görüntü ▸ Yorumlar**) bunları listeler; metnini seçmek için bir yoruma tıklayın. `change "X" to "Y"`, `delete` veya `add after: "Z"` gibi basit talimatlar, tek tek ya da **Tümünü Uygula** ile uygulayabileceğiniz önerilere dönüşür (ikisi de geri alınabilir); diğerlerini tamamlandı olarak işaretleyebilir, reddedebilir veya yanıtlayabilirsiniz. **Gözden Geçirme İşaretleri Olarak Ekle** bir Markdown kaynağının yorumlarını gözden geçirme işaretlerine dönüştürür; **Dosya ▸ Hakemlere Yanıtı Dışa Aktar…** ise Markdown veya Word biçiminde bir yanıt mektubu yazar. Apple Intelligence bulunan macOS 26’da **Düzenleme Öner (YZ)** doğrudan Mac’inizde bir düzenleme önerir (Ayarlar ▸ Yazma bölümünden açın); siz onaylamadan hiçbir şey uygulanmaz.
+
+**Dosya ▸ Belgeleri Karşılaştır…** iki dosyayı karşılaştırır (Markdown, metin, Word, PDF …); **Dosya ▸ Şununla Karşılaştır** açık belgeyi **Son Kaydedilen Sürüm** (en son kendiniz kaydettiğiniz an), bir **Önceki Sürüm…** veya **Pano** ile karşılaştırır. Değişiklikleri **Yan Yana** veya **Satır İçi** gösterin; boşlukları, büyük/küçük harfi veya biçimlendirmeyi yok sayın (biçimlendirme yalnızca ekrandaki karşılaştırmayı etkiler) ve değişiklikler arasında ⌘↑ / ⌘↓ ile geçin. **Gözden Geçirme İşaretleriyle Aç** farkları kabul edebileceğiniz veya reddedebileceğiniz değişikliklere dönüştürür; **Değişiklik İzlemeli Word Olarak Dışa Aktar…** bunları Word belgesi olarak kaydeder.
+
 ---
 
 **Dışa aktarma:** Dosya ▸ Dışa Aktar ▸ PDF (⇧⌘E), Word (⇧⌘D), HTML veya EPUB.
-**İçe aktarma:** Dosya ▸ Aç (⌘O) – DOCX, DOC, RTF, TXT ve MD dosyaları.
+**İçe aktarma:** Dosya ▸ Aç (⌘O) – DOCX, DOC, RTF, PDF, TXT ve MD dosyaları.

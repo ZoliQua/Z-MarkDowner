@@ -106,7 +106,15 @@ Tracked changes and comments of Word documents are imported as review marks — 
 
 **View ▸ Live Formatting** (⌥⌘L) hides the Markdown markup except on the line you are editing. Click the word count in the status bar for statistics, reading time and writing goals. The sidebar's **Search** tab searches and replaces in every Markdown and text file of a folder (⌥⇧⌘F).
 
+## PDF import, review comments and comparing versions
+
+**File ▸ Open** (⌘O) also opens a PDF as a new Markdown document: paragraphs, headings and lists are rebuilt, line numbers, running headers and page numbers are removed, and scanned pages are read with OCR. Comments and markups in the PDF become review marks. LaTeX sources (`.tex`) open for editing as they are.
+
+**File ▸ Import Review Comments from PDF…** reads the comments of a reviewed PDF and finds each one in the source you edit – Markdown or LaTeX, including files pulled in with `\input`. Save the source file first: the review is stored next to it (`<file>.review.json`). The sidebar's **Comments** tab (**View ▸ Comments**) lists them; click one to select its text. Simple instructions such as `change "X" to "Y"`, `delete` or `add after: "Z"` become suggestions you can apply one by one or with **Apply All** (both can be undone); mark the others done, reject them or reply. **Insert as Review Marks** turns the comments of a Markdown source into review marks, and **File ▸ Export Response to Reviewers…** writes a response letter as Markdown or Word. On macOS 26 with Apple Intelligence, **Suggest Edit (AI)** proposes an edit on your Mac (switch it on in Settings ▸ Writing); nothing is applied without you.
+
+**File ▸ Compare Documents…** compares two files (Markdown, text, Word, PDF …); **File ▸ Compare With** compares the open document with its **Last Saved Version** (the last time you saved it yourself), an **Earlier Version…** or the **Clipboard**. Show the changes **Side by Side** or **Inline**, ignore whitespace, case or formatting (formatting only affects the comparison on screen), and jump between changes with ⌘↑ / ⌘↓. **Open as Review Marks** turns the differences into changes you can accept or reject; **Export as Word with Tracked Changes…** saves them as a Word document.
+
 ---
 
 **Export:** File ▸ Export ▸ PDF (⇧⌘E), Word (⇧⌘D), HTML or EPUB.
-**Import:** File ▸ Open (⌘O) – DOCX, DOC, RTF, TXT and MD files.
+**Import:** File ▸ Open (⌘O) – DOCX, DOC, RTF, PDF, TXT and MD files.

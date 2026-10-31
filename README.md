@@ -1,6 +1,6 @@
 # Z-MarkDowner
 
-**A native macOS Markdown editor and viewer with Word/PDF/EPUB export and DOCX/DOC/RTF import.**
+**A native macOS Markdown editor and viewer with Word/PDF/EPUB export and DOCX/DOC/RTF/PDF import.**
 
 [English](#english) · [Magyar](#magyar)
 
@@ -33,6 +33,14 @@ Z-MarkDowner is a fast, native (AppKit) Markdown editor for macOS. Write in a sy
 - **Word templates** (.dotx / .docx): styles (matched by name, also in localized Word), page setup, headers and footers
 - **Review**: Word tracked changes and comments are imported as CriticMarkup (`{++…++}`, `{--…--}`, `{==…==}{>>…<<}`), can be accepted / rejected, and are exported back to Word as tracked changes and comments
 
+**Review comments and comparing versions**
+- **Import Review Comments from PDF**: the highlights and notes of a reviewed PDF are found in the source you edit — Markdown or **LaTeX** (also in files pulled in with `\input`) — and listed in the sidebar's **Comments** tab
+- Simple instructions (`change "X" to "Y"`, `delete`, `add after: "Z"`) become suggestions you apply one by one or with **Apply All** (undoable); mark comments done or rejected, write replies; the review is kept next to the source in `<file>.review.json`
+- **Insert as Review Marks** (Markdown) and **Export Response to Reviewers** as Markdown or Word
+- Optional on-device **Apple Intelligence** suggestions for free-form comments (macOS 26 or later; nothing leaves the Mac)
+- **Compare Documents** (Markdown, text, Word, PDF) or **Compare With** the last saved version, an earlier version or the clipboard: side by side or inline, word-level, ignoring whitespace, case or formatting; **Open as Review Marks** or **Export as Word with Tracked Changes**
+- **LaTeX** (`.tex`) files open for editing with LaTeX syntax highlighting
+
 **Viewing**
 - Three views: editor, split view and final (rendered) view — plus native full screen
 - Synchronized scrolling between editor and preview in both directions
@@ -46,7 +54,7 @@ Z-MarkDowner is a fast, native (AppKit) Markdown editor for macOS. Write in a sy
 - Math with KaTeX (`$…$`, `$$…$$`) and Mermaid diagrams (```` ```mermaid ````)
 - Syntax highlighting for 20+ languages in code blocks
 
-**Import** — DOCX (own reader: Word styles, numbering, hyperlinks, tables, footnotes), DOC, RTF, ODT, HTML, TXT (UTF-8 / UTF-16 / Windows-1250 / Latin-2 detection) and MD. Imported files open as new Markdown documents, so the original is never overwritten.
+**Import** — DOCX (own reader: Word styles, numbering, hyperlinks, tables, footnotes), **PDF** (paragraphs and headings rebuilt, line numbers and running headers removed, OCR for scanned pages, PDF comments as review marks), DOC, RTF, ODT, HTML, TXT (UTF-8 / UTF-16 / Windows-1250 / Latin-2 detection) and MD. Imported files open as new Markdown documents, so the original is never overwritten.
 
 **Export**
 - **PDF** – rendered with the same engine as the preview, paginated at line boundaries (A4 or US Letter, page numbers), clickable links and cross-references
@@ -100,6 +108,7 @@ You can also open `Package.swift` in Xcode.
 | Insert comment | ⇧⌘K |
 | Live formatting / Statistics | ⌥⌘L / ⌥⌘S |
 | Search in folder | ⇧⌥⌘F |
+| Previous / next change (compare window) | ⌘↑ / ⌘↓ |
 
 ### Project structure
 
@@ -149,6 +158,14 @@ A Z-MarkDowner gyors, natív (AppKit) Markdown-szerkesztő macOS-re. Szintaxiski
 - **Word-sablonok** (.dotx / .docx): stílusok (név szerint párosítva, magyar Wordben is), oldalbeállítás, élőfej és élőláb
 - **Véleményezés**: a Word követett változásai és megjegyzései CriticMarkup-jelölésként (`{++…++}`, `{--…--}`, `{==…==}{>>…<<}`) kerülnek be, elfogadhatók / elvethetők, és Word-exportnál újra követett változások és megjegyzések lesznek
 
+**Bírálói megjegyzések és verziók összehasonlítása**
+- **Bírálói megjegyzések importálása PDF-ből**: egy véleményezett PDF kiemelései és megjegyzései megkeresődnek az általad szerkesztett forrásban – Markdownban vagy **LaTeX**-ben (a `\input` paranccsal beemelt fájlokban is) –, és az oldalsáv **Megjegyzések** lapján jelennek meg
+- Az egyszerű utasításokból (`change "X" to "Y"`, `delete`, `add after: "Z"`) javaslatok lesznek, amelyeket egyenként vagy az **Összes alkalmazása** gombbal alkalmazhatsz (visszavonhatóan); a megjegyzéseket késznek jelölheted vagy elutasíthatod, válaszolhatsz rájuk; a bírálat a forrás mellett, a `<fájl>.review.json` fájlban marad meg
+- **Beszúrás jelölésként** (Markdown) és **Válasz exportálása a bírálóknak** Markdown- vagy Word-formátumban
+- Opcionális, eszközön futó **Apple Intelligence**-javaslatok a szabad szöveges megjegyzésekhez (macOS 26 vagy újabb; semmi sem hagyja el a Macet)
+- **Dokumentumok összehasonlítása** (Markdown, szöveg, Word, PDF) vagy **Összehasonlítás** a legutóbb mentett verzióval, egy korábbi verzióval vagy a vágólappal: egymás mellett vagy egybefűzve, szószinten, a szóközök, a kis- és nagybetűk vagy a formázás figyelmen kívül hagyásával; **Megnyitás jelölésekkel** vagy **Exportálás Wordbe követett változásokkal**
+- A **LaTeX** (`.tex`) fájlok szerkeszthetően, LaTeX-szintaxiskiemeléssel nyílnak meg
+
 **Megjelenítés**
 - Három nézet: szerkesztő, osztott és végleges (renderelt) nézet, valamint natív teljes képernyő
 - Szinkronizált görgetés a szerkesztő és az előnézet között, mindkét irányban
@@ -162,7 +179,7 @@ A Z-MarkDowner gyors, natív (AppKit) Markdown-szerkesztő macOS-re. Szintaxiski
 - Képletek KaTeX-szel (`$…$`, `$$…$$`) és Mermaid-diagramok (```` ```mermaid ````)
 - Kódkiemelés több mint 20 nyelvhez
 
-**Import**: DOCX (saját olvasó: Word-stílusok, számozás, linkek, táblázatok, lábjegyzetek), DOC, RTF, ODT, HTML, TXT (UTF-8 / UTF-16 / Windows-1250 / Latin-2 felismerés) és MD. Az importált fájl új Markdown-dokumentumként nyílik meg, az eredetit sosem írja felül.
+**Import**: DOCX (saját olvasó: Word-stílusok, számozás, linkek, táblázatok, lábjegyzetek), **PDF** (a bekezdések és címsorok helyreállnak, a sorszámok és élőfejek eltűnnek, a szkennelt oldalakat OCR olvassa be, a PDF megjegyzései jelölésként kerülnek be), DOC, RTF, ODT, HTML, TXT (UTF-8 / UTF-16 / Windows-1250 / Latin-2 felismerés) és MD. Az importált fájl új Markdown-dokumentumként nyílik meg, az eredetit sosem írja felül.
 
 **Export**
 - **PDF**: ugyanazzal a motorral renderelve, mint az előnézet, sorhatárokon tördelve (A4 vagy US Letter, oldalszámok), kattintható linkekkel és kereszthivatkozásokkal
@@ -216,6 +233,7 @@ A `Package.swift` Xcode-ban is megnyitható.
 | Megjegyzés beszúrása | ⇧⌘K |
 | Élő formázás / Statisztika | ⌥⌘L / ⌥⌘S |
 | Keresés a mappában | ⇧⌥⌘F |
+| Előző / következő változás (összehasonlító ablak) | ⌘↑ / ⌘↓ |
 
 ### Közreműködés
 

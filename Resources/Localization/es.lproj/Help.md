@@ -106,7 +106,15 @@ Los cambios controlados y los comentarios de los documentos de Word se importan 
 
 **Visualización ▸ Formato en vivo** (⌥⌘L) oculta las marcas de Markdown excepto en la línea que estás editando. Haz clic en el recuento de palabras de la barra de estado para ver estadísticas, tiempo de lectura y objetivos de escritura. La pestaña **Buscar** de la barra lateral busca y reemplaza en todos los archivos Markdown y de texto de una carpeta (⌥⇧⌘F).
 
+## Importación de PDF, comentarios de revisión y comparación de versiones
+
+**Archivo ▸ Abrir** (⌘O) también abre un PDF como un nuevo documento Markdown: se reconstruyen los párrafos, encabezados y listas, se eliminan los números de línea, los encabezados de página y los números de página, y las páginas escaneadas se leen con OCR. Los comentarios y marcas del PDF se convierten en marcas de revisión. Las fuentes LaTeX (`.tex`) se abren para editarlas tal cual.
+
+**Archivo ▸ Importar comentarios de revisión desde PDF…** lee los comentarios de un PDF revisado y localiza cada uno en el origen que editas: Markdown o LaTeX, incluidos los archivos incorporados con `\input`. Guarda primero el archivo de origen: la revisión se almacena junto a él (`<archivo>.review.json`). La pestaña **Comentarios** de la barra lateral (**Visualización ▸ Comentarios**) los muestra; haz clic en uno para seleccionar su texto. Las instrucciones sencillas como `change "X" to "Y"`, `delete` o `add after: "Z"` se convierten en sugerencias que puedes aplicar una a una o con **Aplicar todas** (ambas cosas se pueden deshacer); los demás puedes marcarlos como hechos, rechazarlos o responderlos. **Insertar como marcas de revisión** convierte los comentarios de un origen Markdown en marcas de revisión, y **Archivo ▸ Exportar respuesta a los revisores…** escribe una carta de respuesta en Markdown o Word. En macOS 26 con Apple Intelligence, **Sugerir cambio (IA)** propone un cambio en tu Mac (actívalo en Ajustes ▸ Escritura); nada se aplica sin ti.
+
+**Archivo ▸ Comparar documentos…** compara dos archivos (Markdown, texto, Word, PDF…); **Archivo ▸ Comparar con** compara el documento abierto con su **Última versión guardada** (la última vez que lo guardaste tú), una **Versión anterior…** o el **Portapapeles**. Muestra los cambios **En paralelo** o **En línea**, ignora los espacios en blanco, las mayúsculas y minúsculas o el formato (el formato solo afecta a la comparación en pantalla) y salta entre los cambios con ⌘↑ / ⌘↓. **Abrir como marcas de revisión** convierte las diferencias en cambios que puedes aceptar o rechazar; **Exportar como Word con control de cambios…** los guarda como documento de Word.
+
 ---
 
 **Exportar:** Archivo ▸ Exportar ▸ PDF (⇧⌘E), Word (⇧⌘D), HTML o EPUB.
-**Importar:** Archivo ▸ Abrir (⌘O) – archivos DOCX, DOC, RTF, TXT y MD.
+**Importar:** Archivo ▸ Abrir (⌘O) – archivos DOCX, DOC, RTF, PDF, TXT y MD.

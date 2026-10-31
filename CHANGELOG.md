@@ -3,6 +3,26 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/).
 
+## [2.2.0] - 2026-10-31
+
+### Added
+- PDF import: PDFs open as new Markdown documents with paragraphs, headings, lists and metadata rebuilt; line numbers, running headers, page numbers, hyphenation and ligatures are cleaned up, and scanned pages are recognised with on-device OCR (Vision)
+- Comments and markups of an imported PDF (highlights, notes, strike-outs, insertion carets) become review marks; comments that cannot be placed are listed in a *Comments* section at the end
+- *File ▸ Import Review Comments from PDF…*: the comments of a reviewed PDF are anchored in the edited source – Markdown, LaTeX (including files pulled in with `\input`) or plain text – and listed in a new *Comments* sidebar tab (*View ▸ Comments*) with author, page, quote, status and filters
+- Simple instructions (`change "X" to "Y"`, `delete`, `add after: "Z"`, strike-outs, spelling corrections) become suggestions that can be applied one by one or with *Apply All*, with undo; comments can be marked done, rejected, reopened and answered
+- *Insert as Review Marks* turns the comments and suggestions of a Markdown source into CriticMarkup; *File ▸ Export Response to Reviewers…* writes the response letter as Markdown or Word
+- The review is stored next to the source in `<file>.review.json` and continues when the source is opened again
+- Optional on-device Apple Intelligence suggestions for free-form comments (macOS 26 or later, Settings ▸ Writing ▸ Review); suggestions are marked “AI” and never applied automatically
+- LaTeX (`.tex`) sources open for editing with LaTeX syntax highlighting and a `\section` outline, and are saved back unchanged; Markdown-only features (formatting commands, live formatting, rendered preview, printing) are off in these windows
+- Diff window: *File ▸ Compare Documents…* (Markdown, text, Word, PDF …) and *File ▸ Compare With ▸ Last Saved Version (the last explicit save) / Earlier Version… / Clipboard*; side by side or inline at word level, ignore whitespace, case or formatting, previous / next change (⌘↑ / ⌘↓), *Copy Summary*, *Open as Review Marks* and *Export as Word with Tracked Changes…*
+
+### Changed
+- The sidebar tabs (Outline, Files, Search, Comments) are shown as icons with tooltips
+- *File ▸ Import* and *File ▸ Open* accept PDF files
+
+### Fixed
+- Choosing a folder search result now also scrolls the preview to the match
+
 ## [2.1.0] - 2026-10-26
 
 ### Added
@@ -62,6 +82,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Export to PDF, Word (DOCX with real Word styles) and HTML
 - Unit tests and an in-app self test
 
+[2.2.0]: https://github.com/ZoliQua/Z-MarkDowner/releases/tag/v2.2.0
 [2.1.0]: https://github.com/ZoliQua/Z-MarkDowner/releases/tag/v2.1.0
 [2.0.0]: https://github.com/ZoliQua/Z-MarkDowner/releases/tag/v2.0.0
 [1.0.0]: https://github.com/ZoliQua/Z-MarkDowner/releases/tag/v1.0.0

@@ -707,7 +707,8 @@ final class SelfTest {
             wc.compareWithSaved(nil)
             if let diff = DiffWindowController.openControllers.last {
                 _ = await waitFor(5) { diff.result != nil }
-                check(diff.oldTitle.contains("Last Saved") && (diff.result?.insertedWords ?? 0) > 0,
+                let lastSaved = L("compare.lastSavedAt", "Last Saved (%@)").components(separatedBy: "%@")[0]
+                check(diff.oldTitle.contains(lastSaved) && (diff.result?.insertedWords ?? 0) > 0,
                       "LaTeX: compares with the last explicitly saved text (\(diff.oldTitle))")
                 check(!diff.allowsReviewMarks && diff.result != nil,
                       "LaTeX: compare with saved works (\(diff.result?.insertedWords ?? -1) words inserted), Open as Review Marks disabled (\(diff.allowsReviewMarks))")
@@ -846,7 +847,9 @@ final class SelfTest {
             check(back.contains("Please cite the original study.") && back.contains("The original study is now cited."),
                   "Review: DOCX response letter reads back with the comment and the reply")
             let markdown = (try? String(contentsOf: letterMD, encoding: .utf8)) ?? ""
-            check(markdown.hasPrefix("# Response to Reviewers") && markdown.contains("### 3."), "Review: Markdown response letter")
+            let letterTitles = [L("review.letter.title", "Response to Reviewers"),
+                                L("review.letter.titleFor", "Response to Reviewers: %@").components(separatedBy: "%@")[0]]
+            check(letterTitles.contains { markdown.hasPrefix("# " + $0) } && markdown.contains("### 3."), "Review: Markdown response letter")
         } catch {
             check(false, "Review: response letter: \(error.localizedDescription)")
         }
@@ -1097,7 +1100,7 @@ final class SelfTest {
         await diff.recompute()
         guard let window = diff.window, let result = diff.result else { check(false, "Diff: no result"); return }
         activeWindow = window
-        check(window.title == "Compare: A ↔ B", "Diff: window title \(window.title)")
+        check(window.title == LF("diff.windowTitle", "Compare: %@ ↔ %@", "A", "B"), "Diff: window title \(window.title)")
         check(result.insertedWords == 2 && result.deletedWords == 2, "Diff: 2 words inserted, 2 deleted (\(result.insertedWords), \(result.deletedWords))")
         check(diff.oldTextView.string.contains("The quick brown fox") && diff.newTextView.string.contains("The slow brown dog")
               && diff.oldTextView.enclosingScrollView?.isHidden == false,
@@ -1157,7 +1160,7 @@ final class SelfTest {
         sample.window?.setContentSize(NSSize(width: 1000, height: 460))
         await sample.recompute()
         sample.selectNextChange()
-        let summaryCount = { (c: DiffWindowController) in c.summary().components(separatedBy: "\n").first { $0.hasPrefix("Changes:") } ?? "" }
+        let summaryCount = { (c: DiffWindowController) in c.summary().components(separatedBy: "\n").first { $0.hasPrefix(L("diff.summaryChanges", "Changes: %d").components(separatedBy: "%d")[0]) } ?? "" }
         let sideSummary = summaryCount(sample)
         if let w = sample.window {
             await wait(0.4)
@@ -1168,7 +1171,7 @@ final class SelfTest {
             sample.layout = .inline
             await wait(0.3)
             await snapshot(w, name: "diff-inline")
-            check(sideSummary == "Changes: 2" && summaryCount(sample) == "Changes: 8",
+            check(sideSummary == LF("diff.summaryChanges", "Changes: %d", 2) && summaryCount(sample) == LF("diff.summaryChanges", "Changes: %d", 8),
                   "Diff: change counts follow the layout's navigation (\(sideSummary), \(summaryCount(sample)))")
         }
         sample.close()

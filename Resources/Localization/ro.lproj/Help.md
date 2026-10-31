@@ -106,7 +106,15 @@ Modificările urmărite și comentariile din documentele Word sunt importate ca 
 
 **Afișare ▸ Formatare live** (⌥⌘L) ascunde marcajele Markdown, cu excepția rândului pe care îl editați. Faceți clic pe numărul de cuvinte din bara de stare pentru statistici, timp de citire și obiective de scriere. Fila **Căutare** din bara laterală caută și înlocuiește în toate fișierele Markdown și text dintr-un dosar (⌥⇧⌘F).
 
+## Import PDF, comentarii de recenzie și compararea versiunilor
+
+**Fișier ▸ Deschide** (⌘O) deschide și un PDF ca document Markdown nou: paragrafele, titlurile și listele sunt reconstituite, numerele de rând, antetele și numerele de pagină sunt eliminate, iar paginile scanate sunt citite cu OCR. Comentariile și marcajele din PDF devin marcaje de revizuire. Sursele LaTeX (`.tex`) se deschid pentru editare așa cum sunt.
+
+**Fișier ▸ Importă comentariile recenzentului din PDF…** citește comentariile unui PDF recenzat și îl găsește pe fiecare în sursa pe care o editați – Markdown sau LaTeX, inclusiv fișierele incluse cu `\input`. Salvați mai întâi fișierul sursă: recenzia este stocată lângă el (`<fișier>.review.json`). Fila **Comentarii** din bara laterală (**Afișare ▸ Comentarii**) le afișează; faceți clic pe unul pentru a-i selecta textul. Instrucțiunile simple precum `change "X" to "Y"`, `delete` sau `add after: "Z"` devin sugestii pe care le puteți aplica pe rând sau cu **Aplică toate** (ambele pot fi anulate); pe celelalte le puteți marca drept rezolvate, le puteți respinge sau le puteți răspunde. **Inserează ca marcaje de revizuire** transformă comentariile unei surse Markdown în marcaje de revizuire, iar **Fișier ▸ Exportă răspunsul către recenzenți…** scrie o scrisoare de răspuns în format Markdown sau Word. Pe macOS 26 cu Apple Intelligence, **Sugerează modificare (IA)** propune o modificare direct pe Mac (activați funcția în Configurări ▸ Scriere); nimic nu se aplică fără dvs.
+
+**Fișier ▸ Compară documente…** compară două fișiere (Markdown, text, Word, PDF…); **Fișier ▸ Compară cu** compară documentul deschis cu **Ultima versiune salvată** (ultima dată când l-ați salvat chiar dvs.), o **Versiune anterioară…** sau **Clipboard**. Afișați modificările **Alăturat** sau **În text**, ignorați spațiile, majusculele sau formatarea (formatarea afectează doar compararea de pe ecran) și treceți de la o modificare la alta cu ⌘↑ / ⌘↓. **Deschide cu marcaje de revizuire** transformă diferențele în modificări pe care le puteți accepta sau respinge; **Exportă ca Word cu urmărirea modificărilor…** le salvează ca document Word.
+
 ---
 
 **Export:** Fișier ▸ Exportă ▸ PDF (⇧⌘E), Word (⇧⌘D), HTML sau EPUB.
-**Import:** Fișier ▸ Deschide (⌘O) – fișiere DOCX, DOC, RTF, TXT și MD.
+**Import:** Fișier ▸ Deschide (⌘O) – fișiere DOCX, DOC, RTF, PDF, TXT și MD.

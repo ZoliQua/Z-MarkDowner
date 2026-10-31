@@ -106,7 +106,15 @@ Les modifications suivies et les commentaires des documents Word sont importés 
 
 **Présentation ▸ Mise en forme en direct** (⌥⌘L) masque le balisage Markdown, sauf sur la ligne en cours de modification. Cliquez sur le nombre de mots dans la barre d’état pour afficher les statistiques, le temps de lecture et les objectifs d’écriture. L’onglet **Recherche** de la barre latérale recherche et remplace dans tous les fichiers Markdown et texte d’un dossier (⌥⇧⌘F).
 
+## Import PDF, commentaires de relecture et comparaison de versions
+
+**Fichier ▸ Ouvrir** (⌘O) ouvre aussi un PDF comme nouveau document Markdown : les paragraphes, titres et listes sont reconstitués, les numéros de ligne, en-têtes courants et numéros de page sont supprimés, et les pages numérisées sont lues par OCR. Les commentaires et annotations du PDF deviennent des marques de révision. Les sources LaTeX (`.tex`) s’ouvrent telles quelles pour être modifiées.
+
+**Fichier ▸ Importer les commentaires de relecture depuis un PDF…** lit les commentaires d’un PDF relu et retrouve chacun d’eux dans la source que vous modifiez – Markdown ou LaTeX, y compris les fichiers inclus avec `\input`. Enregistrez d’abord le fichier source : la relecture est stockée à côté (`<fichier>.review.json`). L’onglet **Commentaires** de la barre latérale (**Présentation ▸ Commentaires**) les affiche ; cliquez sur l’un d’eux pour sélectionner son texte. Les instructions simples comme `change "X" to "Y"`, `delete` ou `add after: "Z"` deviennent des suggestions à appliquer une par une ou avec **Tout appliquer** (les deux peuvent être annulés) ; les autres peuvent être marqués comme traités, refusés ou recevoir une réponse. **Insérer comme marques de révision** transforme les commentaires d’une source Markdown en marques de révision, et **Fichier ▸ Exporter la réponse aux relecteurs…** rédige une lettre de réponse au format Markdown ou Word. Sous macOS 26 avec Apple Intelligence, **Suggérer une modification (IA)** propose une modification directement sur votre Mac (à activer dans Réglages ▸ Écriture) ; rien n’est appliqué sans vous.
+
+**Fichier ▸ Comparer des documents…** compare deux fichiers (Markdown, texte, Word, PDF…) ; **Fichier ▸ Comparer avec** compare le document ouvert avec sa **Dernière version enregistrée** (la dernière fois que vous l’avez enregistré vous-même), une **Version antérieure…** ou le **Presse-papiers**. Affichez les modifications **Côte à côte** ou en mode **Intégré**, ignorez les espaces, la casse ou la mise en forme (la mise en forme n’affecte que la comparaison à l’écran) et passez d’une modification à l’autre avec ⌘↑ / ⌘↓. **Ouvrir avec les marques de révision** transforme les différences en modifications à accepter ou refuser ; **Exporter au format Word avec suivi des modifications…** les enregistre dans un document Word.
+
 ---
 
 **Exporter :** Fichier ▸ Exporter ▸ PDF (⇧⌘E), Word (⇧⌘D), HTML ou EPUB.
-**Importer :** Fichier ▸ Ouvrir (⌘O) – fichiers DOCX, DOC, RTF, TXT et MD.
+**Importer :** Fichier ▸ Ouvrir (⌘O) – fichiers DOCX, DOC, RTF, PDF, TXT et MD.

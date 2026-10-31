@@ -106,7 +106,15 @@ Nachverfolgte Änderungen und Kommentare aus Word-Dokumenten werden als Überarb
 
 **Darstellung ▸ Live-Formatierung** (⌥⌘L) blendet die Markdown-Auszeichnungen aus – außer in der Zeile, die du gerade bearbeitest. Klicke in der Statusleiste auf die Wortzahl, um Statistik, Lesezeit und Schreibziele zu sehen. Der Tab **Suche** in der Seitenleiste sucht und ersetzt in allen Markdown- und Textdateien eines Ordners (⌥⇧⌘F).
 
+## PDF-Import, Gutachterkommentare und Versionen vergleichen
+
+**Ablage ▸ Öffnen** (⌘O) öffnet auch ein PDF als neues Markdown-Dokument: Absätze, Überschriften und Listen werden wiederhergestellt, Zeilennummern, Kopfzeilen und Seitenzahlen entfernt und gescannte Seiten per OCR gelesen. Kommentare und Markierungen im PDF werden zu Überarbeitungsmarkierungen. LaTeX-Quellen (`.tex`) werden unverändert zum Bearbeiten geöffnet.
+
+**Ablage ▸ Gutachterkommentare aus PDF importieren …** liest die Kommentare eines begutachteten PDFs und findet jeden in der Quelle, die du bearbeitest – Markdown oder LaTeX, einschließlich der mit `\input` eingebundenen Dateien. Sichere zuerst die Quelldatei: Die Begutachtung wird daneben gespeichert (`<Datei>.review.json`). Der Tab **Kommentare** der Seitenleiste (**Darstellung ▸ Kommentare**) listet sie auf; ein Klick wählt den zugehörigen Text aus. Einfache Anweisungen wie `change "X" to "Y"`, `delete` oder `add after: "Z"` werden zu Vorschlägen, die du einzeln oder mit **Alle anwenden** übernehmen kannst (beides lässt sich widerrufen); die übrigen markierst du als erledigt, lehnst sie ab oder beantwortest sie. **Als Überarbeitungsmarkierungen einfügen** macht aus den Kommentaren einer Markdown-Quelle Überarbeitungsmarkierungen, und **Ablage ▸ Antwort an die Gutachter exportieren …** schreibt ein Antwortschreiben als Markdown oder Word. Unter macOS 26 mit Apple Intelligence schlägt **Änderung vorschlagen (KI)** direkt auf deinem Mac eine Änderung vor (einschalten unter Einstellungen ▸ Schreiben); ohne dich wird nichts übernommen.
+
+**Ablage ▸ Dokumente vergleichen …** vergleicht zwei Dateien (Markdown, Text, Word, PDF …); **Ablage ▸ Vergleichen mit** vergleicht das geöffnete Dokument mit der **Zuletzt gesicherten Version** (dem letzten Mal, als du selbst gesichert hast), einer **früheren Version …** oder der **Zwischenablage**. Zeige die Änderungen **Nebeneinander** oder **Im Text**, ignoriere Leerraum, Groß-/Kleinschreibung oder Formatierung (die Formatierung betrifft nur den Vergleich auf dem Bildschirm) und springe mit ⌘↑ / ⌘↓ zwischen den Änderungen. **Mit Überarbeitungsmarkierungen öffnen** macht aus den Unterschieden Änderungen, die du annehmen oder ablehnen kannst; **Als Word mit Änderungsverfolgung exportieren …** sichert sie als Word-Dokument.
+
 ---
 
 **Export:** Ablage ▸ Exportieren ▸ PDF (⇧⌘E), Word (⇧⌘D), HTML oder EPUB.
-**Import:** Ablage ▸ Öffnen (⌘O) – DOCX-, DOC-, RTF-, TXT- und MD-Dateien.
+**Import:** Ablage ▸ Öffnen (⌘O) – DOCX-, DOC-, RTF-, PDF-, TXT- und MD-Dateien.
