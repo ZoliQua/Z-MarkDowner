@@ -1097,5 +1097,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     func windowWillClose(_ notification: Notification) {
         previewWork?.cancel()
+        review.cancelAI()
     }
 }

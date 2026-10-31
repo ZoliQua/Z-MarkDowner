@@ -888,6 +888,11 @@ final class SelfTest {
             check(false, "Review AI: \(error.localizedDescription)")
         }
         let before = review.session?.comments ?? []
+        defer {
+            // The review checks that follow see the comments exactly as imported
+            for comment in before { review.update(comment) }
+            check(review.session?.comments == before, "Review AI: the comments are restored after the AI checks")
+        }
         await review.suggestAllWithAI()
         let after = review.session?.comments ?? []
         let parsed = before.filter { $0.suggestion != nil }
@@ -906,6 +911,22 @@ final class SelfTest {
                   "Review AI: a free-form remark gets an AI suggestion or none (\(result?.suggestion.map { String(describing: $0) } ?? "none"); \(review.aiStatus))")
             await wait(0.3)
             await snapshot(window, name: "review-panel-ai")
+            // A started batch is marked running at once, and Cancel stops it before the next comment
+            review.update(remark)
+            review.startSuggesting(nil)
+            let marked = review.isSuggesting
+            review.startSuggesting(nil)
+            review.cancelAI()
+            let stopped = await waitFor(10) { !review.isSuggesting }
+            check(marked && stopped && review.comment(remark.id)?.suggestion == nil,
+                  "Review AI: a batch is marked running at once and Cancel stops it (\(review.aiStatus))")
+            // Turning the setting off stops a running batch too
+            review.startSuggesting(nil)
+            Settings.shared.aiSuggestions = false
+            let ended = await waitFor(10) { !review.isSuggesting }
+            check(ended && review.comment(remark.id)?.suggestion == nil,
+                  "Review AI: turning the setting off stops the batch (\(review.aiStatus))")
+            Settings.shared.aiSuggestions = true
             review.update(original)
         }
         Settings.shared.aiSuggestions = false

@@ -331,6 +331,8 @@ final class ReviewController {
     /// The panel's status line for AI work: progress ("AI 3 / 40…") or the outcome of the last run.
     private(set) var aiStatus = ""
     private(set) var isSuggesting = false
+    /// The background run started from the panel; cancelled by its Cancel button and when the window closes.
+    private var aiTask: Task<Void, Never>?
 
     /// Whether the on-device model may be asked about the comment: it is open, has a text and lies in the
     /// source, and has no suggestion from the instruction parser (an earlier AI suggestion may be redone).
@@ -349,6 +351,7 @@ final class ReviewController {
     @MainActor
     func suggestWithAI(_ id: String) async {
         guard let comment = comment(id), canSuggestWithAI(comment) else { return }
+        isSuggesting = true
         await runAI([id])
     }
 
@@ -356,29 +359,64 @@ final class ReviewController {
     /// stops early when the surrounding task is cancelled.
     @MainActor
     func suggestAllWithAI() async {
+        guard let ids = beginAll() else { return }
+        await runAI(ids)
+    }
+
+    /// The candidates for a run over all comments, marking the run as started; nil (with a status) when
+    /// there are none or a run is already going.
+    @MainActor
+    private func beginAll() -> [String]? {
+        guard !isSuggesting else { return nil }
         let ids = aiCandidateIDs
         guard !ids.isEmpty else {
             aiStatus = L("ai.nothing", "AI: no comments without a suggestion")
             onChange?()
-            return
+            return nil
         }
-        await runAI(ids)
+        isSuggesting = true
+        return ids
+    }
+
+    /// Starts a background run for one comment, or for all comments without a suggestion when `id` is nil.
+    /// The run is marked as started before this returns, so a second click cannot start another one.
+    @MainActor
+    func startSuggesting(_ id: String?) {
+        let ids: [String]
+        if let id {
+            guard let comment = comment(id), canSuggestWithAI(comment) else { return }
+            isSuggesting = true
+            ids = [id]
+        } else {
+            guard let all = beginAll() else { return }
+            ids = all
+        }
+        onChange?()
+        aiTask = Task { @MainActor [weak self] in
+            await self?.runAI(ids)
+            self?.aiTask = nil
+        }
+    }
+
+    /// Stops the background run after the comment being processed.
+    func cancelAI() {
+        aiTask?.cancel()
+        aiTask = nil
     }
 
     private enum AIOutcome { case suggested, noEdit, outside, failed(String) }
 
     @MainActor
     private func runAI(_ ids: [String]) async {
-        isSuggesting = true
-        var suggested = 0, failures = 0, asked = 0
+        var suggested = 0, failures = 0, asked = 0, stopped = false
         var lastOutcome = AIOutcome.noEdit
         var lastError: String?
         for (index, id) in ids.enumerated() {
-            if Task.isCancelled { break }
+            if Task.isCancelled || !AISuggester.isEnabled { stopped = true; break }
             aiStatus = ids.count == 1 ? L("ai.working", "AI is reading the comment…") : LF("ai.progress", "AI %d / %d…", index + 1, ids.count)
             onChange?()
             lastOutcome = await suggestOne(id)
-            if Task.isCancelled { break }
+            if Task.isCancelled { stopped = true; break }
             asked += 1
             switch lastOutcome {
             case .suggested: suggested += 1
@@ -390,7 +428,7 @@ final class ReviewController {
             if case .failed = lastOutcome, !AISuggester.isAvailable { break }
         }
         isSuggesting = false
-        if Task.isCancelled {
+        if stopped {
             aiStatus = LF("ai.cancelled", "AI stopped after %d of %d comments: %d suggestions", asked, ids.count, suggested)
         } else if ids.count == 1 {
             switch lastOutcome {

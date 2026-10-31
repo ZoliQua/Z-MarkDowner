@@ -17,7 +17,6 @@ final class ReviewPanelView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     private let aiStatusLabel = NSTextField(labelWithString: "")
     private let aiCancelButton = NSButton()
     private let aiStatusRow = NSStackView()
-    private var aiTask: Task<Void, Never>?
     private let scroll = NSScrollView()
     private let table = NSTableView()
     private let emptyLabel = NSTextField(wrappingLabelWithString: "")
@@ -324,25 +323,16 @@ final class ReviewPanelView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         case .reject: controller.setStatus(comment.id, .rejected)
         case .reopen: controller.setStatus(comment.id, .open)
         case .reply: askReply(for: comment)
-        case .suggestAI: startAI { await $0.suggestWithAI(comment.id) }
-        }
-    }
-
-    /// Runs one AI pass in the background; the Cancel button in the status line stops it.
-    private func startAI(_ work: @escaping @MainActor (ReviewController) async -> Void) {
-        guard let controller, !controller.isSuggesting else { return }
-        aiTask = Task { @MainActor [weak self] in
-            await work(controller)
-            self?.aiTask = nil
+        case .suggestAI: controller.startSuggesting(comment.id)
         }
     }
 
     @objc private func aiAllClicked() {
-        startAI { await $0.suggestAllWithAI() }
+        controller?.startSuggesting(nil)
     }
 
     @objc private func aiCancelClicked() {
-        aiTask?.cancel()
+        controller?.cancelAI()
     }
 
     @objc private func settingsChanged() {
