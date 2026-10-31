@@ -136,14 +136,14 @@ final class ReviewSessionTests: XCTestCase {
 
     private func sampleSession() -> ReviewSession {
         let comments = [
-            ReviewComment(id: "p0-0", page: 0, author: "Reviewer", date: Date(timeIntervalSince1970: 1_700_000_000.25),
+            ReviewComment(id: "p0-0", page: 0, author: "Reviewer", date: Date(timeIntervalSince1970: 1_700_000_000),
                           kind: .highlight, quotedText: "bugs", contextBefore: "Results show", contextAfter: "in coverage",
                           comment: "Use regressions", suggestion: .replace(target: "bugs", with: "regressions"),
                           suggestionIsAI: true),
             ReviewComment(id: "p1-0", page: 1, author: "R2", kind: .note, comment: "Nice figure.", status: .done, reply: "Thanks."),
         ]
         return ReviewSession(pdfPath: "/tmp/review.pdf", mainPath: folder.appendingPathComponent("paper.tex").path,
-                             sourceFormat: .latex, comments: comments, createdAt: Date(timeIntervalSince1970: 1_700_000_100.5))
+                             sourceFormat: .latex, comments: comments, createdAt: Date(timeIntervalSince1970: 1_700_000_100))
     }
 
     func testSidecarRoundTrip() throws {
@@ -154,6 +154,39 @@ final class ReviewSessionTests: XCTestCase {
         try session.save(for: source)
         XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent("paper.tex.review.json").path))
         XCTAssertEqual(ReviewSession.load(for: source), session)
+    }
+
+    func testSidecarStoresISODatesAndToleratesUnknownValues() throws {
+        let source = folder.appendingPathComponent("paper.md")
+        var session = sampleSession()
+        session.comments[0].date = Date(timeIntervalSince1970: 1_700_000_000)
+        try session.save(for: source)
+        let json = try String(contentsOf: ReviewSession.sidecarURL(for: source), encoding: .utf8)
+        XCTAssertTrue(json.contains(#""createdAt" : "2023-11-14T22:15:00Z""#), json)
+        XCTAssertTrue(json.contains(#""date" : "2023-11-14T22:13:20Z""#), json)
+        XCTAssertEqual(ReviewSession.load(for: source), session)
+
+        let newer = """
+        {"pdfPath":"/tmp/r.pdf","mainPath":"/tmp/paper.md","sourceFormat":"markdown","createdAt":"2026-10-31T08:30:00.250Z",
+         "comments":[
+          {"id":"p0-0","kind":"stamp","status":"archived","suggestion":{"rewrite":{"target":"a"}},"comment":"From a newer version.",
+           "date":"2026-10-31T08:00:00Z"},
+          {"id":"p0-1","kind":"note","status":"done","comment":"Fine.","reply":"Thanks."},
+          {"id":"p0-2","kind":"highlight","suggestion":{"replace":{"target":"bugs","with":"regressions"}}}
+         ]}
+        """
+        try Data(newer.utf8).write(to: ReviewSession.sidecarURL(for: source))
+        let loaded = try XCTUnwrap(ReviewSession.load(for: source))
+        XCTAssertEqual(loaded.comments.map(\.id), ["p0-0", "p0-1", "p0-2"])
+        XCTAssertEqual(loaded.comments[0].kind, .highlight)
+        XCTAssertEqual(loaded.comments[0].status, .open)
+        XCTAssertNil(loaded.comments[0].suggestion)
+        XCTAssertEqual(loaded.comments[0].comment, "From a newer version.")
+        XCTAssertEqual(loaded.comments[0].date, Date(timeIntervalSince1970: 1_793_433_600))
+        XCTAssertEqual(loaded.comments[1].status, .done)
+        XCTAssertEqual(loaded.comments[1].reply, "Thanks.")
+        XCTAssertEqual(loaded.comments[2].suggestion, .replace(target: "bugs", with: "regressions"))
+        XCTAssertEqual(loaded.createdAt.timeIntervalSince1970, 1_793_435_400.25, accuracy: 0.001)
     }
 
     func testCorruptSidecarIgnored() throws {

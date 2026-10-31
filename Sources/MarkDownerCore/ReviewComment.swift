@@ -70,22 +70,23 @@ extension ReviewComment {
         case suggestion, suggestionIsAI, status, reply
     }
 
-    /// Decodes tolerantly: only `id` is required, so sidecars written by older or newer versions still load.
+    /// Decodes tolerantly: only `id` is required, and an unknown kind, status or suggestion (from a newer
+    /// version) falls back to its default, so sidecars written by older or newer versions still load.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(id: try c.decode(String.self, forKey: .id),
                   page: try c.decodeIfPresent(Int.self, forKey: .page) ?? 0,
                   author: try c.decodeIfPresent(String.self, forKey: .author) ?? "",
-                  date: try c.decodeIfPresent(Date.self, forKey: .date),
-                  kind: try c.decodeIfPresent(AnnotationKind.self, forKey: .kind) ?? .highlight,
+                  date: (try? c.decodeIfPresent(Date.self, forKey: .date)) ?? nil,
+                  kind: (try? c.decodeIfPresent(AnnotationKind.self, forKey: .kind)) ?? .highlight,
                   quotedText: try c.decodeIfPresent(String.self, forKey: .quotedText) ?? "",
                   contextBefore: try c.decodeIfPresent(String.self, forKey: .contextBefore) ?? "",
                   contextAfter: try c.decodeIfPresent(String.self, forKey: .contextAfter) ?? "",
                   comment: try c.decodeIfPresent(String.self, forKey: .comment) ?? "",
                   replies: try c.decodeIfPresent([String].self, forKey: .replies) ?? [],
-                  suggestion: try c.decodeIfPresent(Suggestion.self, forKey: .suggestion),
+                  suggestion: (try? c.decodeIfPresent(Suggestion.self, forKey: .suggestion)) ?? nil,
                   suggestionIsAI: try c.decodeIfPresent(Bool.self, forKey: .suggestionIsAI) ?? false,
-                  status: try c.decodeIfPresent(ReviewStatus.self, forKey: .status) ?? .open,
+                  status: (try? c.decodeIfPresent(ReviewStatus.self, forKey: .status)) ?? .open,
                   reply: try c.decodeIfPresent(String.self, forKey: .reply) ?? "")
     }
 }

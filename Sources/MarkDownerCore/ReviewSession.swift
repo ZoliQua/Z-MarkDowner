@@ -54,9 +54,30 @@ extension ReviewSession {
     }
 
     public func save(for source: URL) throws {
+        try Self.sidecarEncoder().encode(self).write(to: Self.sidecarURL(for: source), options: .atomic)
+    }
+
+    /// Sidecar JSON: sorted keys, dates as ISO 8601 strings (whole seconds, UTC).
+    public static func sidecarEncoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(self).write(to: Self.sidecarURL(for: source), options: .atomic)
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }
+
+    /// Reads ISO 8601 dates, with or without fractional seconds.
+    public static func sidecarDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let string = try container.decode(String.self)
+            let formatter = ISO8601DateFormatter()
+            if let date = formatter.date(from: string) { return date }
+            formatter.formatOptions.insert(.withFractionalSeconds)
+            if let date = formatter.date(from: string) { return date }
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Not an ISO 8601 date: \(string)")
+        }
+        return decoder
     }
 
     /// The session saved for `source`, or nil when there is none, it cannot be read, or — when `pdf`
@@ -64,7 +85,7 @@ extension ReviewSession {
     /// matched by file name, so a moved review PDF still finds its session.
     public static func load(for source: URL, pdf: URL? = nil) -> ReviewSession? {
         guard let data = try? Data(contentsOf: sidecarURL(for: source)),
-              let session = try? JSONDecoder().decode(ReviewSession.self, from: data) else { return nil }
+              let session = try? sidecarDecoder().decode(ReviewSession.self, from: data) else { return nil }
         guard let pdf else { return session }
         let stored = URL(fileURLWithPath: session.pdfPath).standardizedFileURL
         if stored.path == pdf.standardizedFileURL.path { return session }
