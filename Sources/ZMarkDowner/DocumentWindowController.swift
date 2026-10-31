@@ -39,6 +39,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     private(set) var mode: ViewMode = .split
 
+    /// Comments imported from a reviewer's PDF (Comments tab of the sidebar).
+    let review = ReviewController()
+
     /// Set at init; NSDocument.addWindowController assigns `document` afterwards
     /// (assigning it ourselves beforehand makes addWindowController skip registration).
     private weak var ownerDocument: MarkdownDocument?
@@ -59,6 +62,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         window.tabbingMode = .preferred
         super.init(window: window)
         ownerDocument = document
+        review.windowController = self
         window.delegate = self
         buildUI()
         buildToolbar()
@@ -151,6 +155,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
 
         sidebar.onSelectHeading = { [weak self] line in self?.reveal(line: line) }
         sidebar.searchView.onOpenMatch = { [weak self] url, range in self?.openSearchResult(url, range) }
+        sidebar.reviewView.controller = review
+        review.onChange = { [weak self] in self?.sidebar.reviewView.reload() }
         preview.onScroll = { [weak self] line in self?.previewDidScroll(line) }
 
         // Status bar
@@ -263,6 +269,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         markdownDocument?.undoManager?.removeAllActions()
         sidebar.currentFile = markdownDocument?.fileURL
         sidebar.documentFolderChanged(markdownDocument?.baseDirectory)
+        review.loadSidecar()
     }
 
     /// Called when the document re-reads its file (e.g. Revert).
@@ -277,6 +284,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         sidebar.currentFile = markdownDocument?.fileURL
         sidebar.documentFolderChanged(markdownDocument?.baseDirectory)
         sidebar.reloadFiles()
+        review.mainLocationChanged()
     }
 
     func commitEditing() {
@@ -730,6 +738,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         case #selector(exportPDF(_:)), #selector(exportDOCX(_:)), #selector(exportHTML(_:)), #selector(exportEPUB(_:)),
              #selector(EditorTextView.copyAsRichText(_:)):
             return !isLatex
+        case #selector(exportResponseLetter(_:)):
+            return review.session != nil
+        case #selector(showComments(_:)):
+            menuItem.state = isSidebarVisible && sidebar.selectedTab == SidebarView.commentsTab ? .on : .off
         case #selector(toggleNumberSections(_:)):
             menuItem.state = Settings.shared.numberSections ? .on : .off
         default: break

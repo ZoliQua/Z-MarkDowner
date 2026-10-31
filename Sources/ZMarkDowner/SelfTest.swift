@@ -71,6 +71,7 @@ final class SelfTest {
         await editingAndViews()
         await scholarlyAndWriting()
         await latexSources()
+        await reviewFromPDF()
         await finish()
     }
 
@@ -706,6 +707,227 @@ final class SelfTest {
         } catch {
             check(false, "LaTeX: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: 5. Review comments from a PDF
+
+    /// Imports the comments of an annotated PDF into the Comments panel of a Markdown and of a two-file
+    /// LaTeX manuscript: anchoring, applying suggestions (undoable, re-verified after edits), statuses,
+    /// replies, the sidecar, the response letter and review marks.
+    private func reviewFromPDF() async {
+        let dir = output.appendingPathComponent("review", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let sentence = "Results show bugs in current tools for visualization."
+        let pdfURL = dir.appendingPathComponent("reviewed.pdf")
+        guard let pdf = Self.annotatedPDF(text: sentence), pdf.write(to: pdfURL) else {
+            check(false, "Review: synthetic annotated PDF could not be made")
+            return
+        }
+        let mdURL = dir.appendingPathComponent("paper.md")
+        let source = "# Paper\n\n\(sentence)\n"
+        try? source.write(to: mdURL, atomically: true, encoding: .utf8)
+        guard let (opened, _) = try? await NSDocumentController.shared.openDocument(withContentsOf: mdURL, display: true),
+              let doc = opened as? MarkdownDocument, let wc = doc.windowController, let window = wc.window,
+              let editor = wc.editor else {
+            check(false, "Review: paper.md did not open")
+            return
+        }
+        activeWindow = window
+        let review = wc.review
+        do {
+            try review.importPDF(pdfURL)
+        } catch {
+            check(false, "Review: import failed: \(error.localizedDescription)")
+            return
+        }
+        let comments = review.session?.comments ?? []
+        check(comments.count == 3, "Review: 3 comments imported (\(comments.count))")
+        check(review.anchors.count == 2, "Review: 2 comments anchored in the source (\(review.anchors.count))")
+        wc.showComments(nil)
+        await wait(0.4)
+        check(wc.sidebar.selectedTab == SidebarView.commentsTab && wc.sidebar.reviewView.displayedCount == 3,
+              "Review: Comments tab lists the open comments (\(wc.sidebar.reviewView.displayedCount))")
+        let sidebarWidth = wc.sidebar.frame.width
+        check(wc.sidebar.reviewView.columnWidth > sidebarWidth - 50, "Review: comment rows span the sidebar (\(Int(wc.sidebar.reviewView.columnWidth)) of \(Int(sidebarWidth)))")
+        await snapshot(window, name: "review-panel")
+        func first(_ test: (Suggestion?) -> Bool) -> ReviewComment? { comments.first { test($0.suggestion) } }
+        guard let replace = first({ if case .replace = $0 { return true }; return false }),
+              let delete = first({ if case .delete = $0 { return true }; return false }),
+              let note = first({ $0 == nil }) else {
+            check(false, "Review: expected a replacement, a deletion and a note (\(comments.map(\.suggestion)))")
+            return
+        }
+
+        await endUndoGroup()
+        do {
+            try review.apply(replace.id)
+            check(editor.string.contains("Results show regressions in current tools"), "Review: applying the suggestion edits the source: \(editor.string)")
+            check(review.comment(replace.id)?.status == .applied && wc.sidebar.reviewView.displayedCount == 2,
+                  "Review: the applied comment leaves the Open filter")
+        } catch {
+            check(false, "Review: apply: \(error.localizedDescription)")
+        }
+        await endUndoGroup()
+        check(doc.isDocumentEdited, "Review: applying marks the document edited")
+        doc.undoManager?.undo()
+        check(editor.string == source, "Review: applying is undoable")
+
+        // Text typed before the passage: the anchors are recomputed before the edit
+        editor.replace(NSRange(location: ("# Paper\n\n" as NSString).length, length: 0), with: "In short: ")
+        do {
+            try review.apply(delete.id)
+            check(editor.string.contains("In short: Results show bugs in tools for"), "Review: apply after an edit re-anchors first: \(editor.string)")
+        } catch {
+            check(false, "Review: apply after an edit: \(error.localizedDescription)")
+        }
+        let afterDelete = editor.string
+        do {
+            try review.apply(delete.id)
+            check(false, "Review: a suggestion whose target is gone is refused")
+        } catch {
+            check(editor.string == afterDelete, "Review: a suggestion whose target is gone is refused (\(error.localizedDescription))")
+        }
+
+        // Statuses, replies and the sidecar
+        review.setStatus(note.id, .done)
+        review.setReply(note.id, "The original study is now cited.")
+        check(FileManager.default.fileExists(atPath: ReviewSession.sidecarURL(for: mdURL).path), "Review: sidecar saved next to the source")
+        let reloaded = ReviewController()
+        reloaded.windowController = wc
+        reloaded.loadSidecar()
+        check(reloaded.comment(note.id)?.status == .done && reloaded.comment(note.id)?.reply == "The original study is now cited."
+              && reloaded.comment(delete.id)?.status == .applied && reloaded.anchors.count >= 1,
+              "Review: reloading the sidecar restores statuses and replies")
+        check(review.hasReview(from: pdfURL), "Review: a second import of the same PDF is recognised")
+        try? review.importPDF(pdfURL, continueExisting: true)
+        check(review.comment(note.id)?.status == .done && review.comment(replace.id)?.status == .applied,
+              "Review: continuing the review keeps the progress")
+
+        // Response letter
+        let letterDOCX = dir.appendingPathComponent("response.docx")
+        let letterMD = dir.appendingPathComponent("response.md")
+        do {
+            try review.exportResponse(to: letterDOCX, asDOCX: true)
+            try review.exportResponse(to: letterMD, asDOCX: false)
+            let back = try DocumentImporter.markdown(fromFileAt: letterDOCX)
+            check(back.contains("Please cite the original study.") && back.contains("The original study is now cited."),
+                  "Review: DOCX response letter reads back with the comment and the reply")
+            let markdown = (try? String(contentsOf: letterMD, encoding: .utf8)) ?? ""
+            check(markdown.hasPrefix("# Response to Reviewers") && markdown.contains("### 3."), "Review: Markdown response letter")
+        } catch {
+            check(false, "Review: response letter: \(error.localizedDescription)")
+        }
+
+        // Review marks (single-file Markdown only)
+        check(review.canInsertMarks, "Review: review marks offered for Markdown")
+        review.insertMarks()
+        check(editor.string.contains("{~~bugs~>regressions~~}") && editor.string.contains("{>>Reviewer:"),
+              "Review: comments inserted as review marks: \(editor.string)")
+        doc.updateChangeCount(.changeCleared)
+        doc.close()
+
+        await latexReview(pdfURL: pdfURL, sentence: sentence, in: dir)
+    }
+
+    /// A LaTeX main file that pulls its text in with `\input`: suggestions are applied in the section
+    /// file's own document, opened for it, and the main file stays untouched.
+    private func latexReview(pdfURL: URL, sentence: String, in folder: URL) async {
+        let dir = folder.appendingPathComponent("latex", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let mainURL = dir.appendingPathComponent("main.tex")
+        let secURL = dir.appendingPathComponent("sec.tex")
+        let mainSource = "\\documentclass{article}\n\\begin{document}\n\\section{Introduction}\n\\input{sec}\n\\end{document}\n"
+        let secSource = sentence + "\n"
+        try? mainSource.write(to: mainURL, atomically: true, encoding: .utf8)
+        try? secSource.write(to: secURL, atomically: true, encoding: .utf8)
+        guard let (opened, _) = try? await NSDocumentController.shared.openDocument(withContentsOf: mainURL, display: true),
+              let doc = opened as? MarkdownDocument, let wc = doc.windowController, let window = wc.window else {
+            check(false, "Review LaTeX: main.tex did not open")
+            return
+        }
+        activeWindow = window
+        let review = wc.review
+        do {
+            try review.importPDF(pdfURL)
+        } catch {
+            check(false, "Review LaTeX: import failed: \(error.localizedDescription)")
+            return
+        }
+        let comments = review.session?.comments ?? []
+        let inSection = review.anchorFiles.values.filter { $0.standardizedFileURL.path == secURL.standardizedFileURL.path }.count
+        check(review.anchors.count == 2 && inSection == 2, "Review LaTeX: comments anchored in the \\input file (\(inSection) of \(review.anchors.count))")
+        check(!review.canInsertMarks, "Review LaTeX: no review marks for LaTeX")
+        guard let replace = comments.first(where: { if case .replace = $0.suggestion { return true }; return false }),
+              let delete = comments.first(where: { if case .delete = $0.suggestion { return true }; return false }) else {
+            check(false, "Review LaTeX: suggestions missing")
+            return
+        }
+        do {
+            try review.apply(replace.id)
+        } catch {
+            check(false, "Review LaTeX: apply: \(error.localizedDescription)")
+        }
+        let secDoc = NSDocumentController.shared.document(for: secURL) as? MarkdownDocument
+        let secEditor = secDoc?.windowController?.editor
+        check(secEditor?.string == "Results show regressions in current tools for visualization.\n",
+              "Review LaTeX: the suggestion is applied in sec.tex's document: \(secEditor?.string ?? "not open")")
+        check(wc.editor.string == mainSource && doc.text == mainSource, "Review LaTeX: main.tex stays untouched")
+        check((try? String(contentsOf: secURL, encoding: .utf8)) == secSource, "Review LaTeX: sec.tex is not written behind the user's back")
+        await endUndoGroup()
+        check(secDoc?.isDocumentEdited == true && !doc.isDocumentEdited, "Review LaTeX: sec.tex marked edited, main.tex not")
+        review.select(delete.id)
+        let selected = await waitFor(3) {
+            guard let editor = secEditor else { return false }
+            let range = editor.selectedRange()
+            return range.length > 0 && (editor.string as NSString).substring(with: range) == "current"
+        }
+        check(selected, "Review LaTeX: selecting a comment selects its passage in sec.tex")
+        check(FileManager.default.fileExists(atPath: ReviewSession.sidecarURL(for: mainURL).path)
+              && !FileManager.default.fileExists(atPath: ReviewSession.sidecarURL(for: secURL).path),
+              "Review LaTeX: the review is stored next to main.tex")
+        secDoc?.updateChangeCount(.changeCleared)
+        secDoc?.close()
+        doc.updateChangeCount(.changeCleared)
+        doc.close()
+    }
+
+    /// A one-page PDF with `text` (which must contain “bugs” and “current”) and three review annotations,
+    /// as the reviewer's PDF reader writes them: a highlight over “bugs” asking for “regressions”, a
+    /// strike-out over “current” and a sticky note.
+    static func annotatedPDF(text: String) -> PDFDocument? {
+        let data = NSMutableData()
+        var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let consumer = CGDataConsumer(data: data as CFMutableData),
+              let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else { return nil }
+        context.beginPDFPage(nil)
+        let font = CTFontCreateWithName("Helvetica" as CFString, 11, nil)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: font]))
+        context.textPosition = CGPoint(x: 72, y: 700)
+        CTLineDraw(line, context)
+        context.endPDFPage()
+        context.closePDF()
+        guard let document = PDFDocument(data: data as Data), let page = document.page(at: 0) else { return nil }
+        func bounds(_ word: String) -> CGRect? {
+            document.findString(word, withOptions: []).first?.bounds(for: page)
+        }
+        func markup(_ type: PDFAnnotationSubtype, over rect: CGRect, contents: String?) -> PDFAnnotation {
+            let annotation = PDFAnnotation(bounds: rect, forType: type, withProperties: nil)
+            annotation.quadrilateralPoints = [NSPoint(x: 0, y: rect.height), NSPoint(x: rect.width, y: rect.height),
+                                              NSPoint(x: 0, y: 0), NSPoint(x: rect.width, y: 0)].map { NSValue(point: $0) }
+            annotation.contents = contents
+            annotation.userName = "Reviewer"
+            return annotation
+        }
+        guard let bugs = bounds("bugs"), let current = bounds("current") else { return nil }
+        page.addAnnotation(markup(.highlight, over: bugs, contents: #"Change "bugs" to "regressions"."#))
+        page.addAnnotation(markup(.strikeOut, over: current, contents: nil))
+        let note = PDFAnnotation(bounds: CGRect(x: 72, y: 400, width: 20, height: 20), forType: .text, withProperties: nil)
+        note.contents = "Please cite the original study."
+        note.userName = "Reviewer"
+        page.addAnnotation(note)
+        guard let saved = document.dataRepresentation() else { return nil }
+        return PDFDocument(data: saved)
     }
 
     /// Closes the current undo group the way the end of a key event would.

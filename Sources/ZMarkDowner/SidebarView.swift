@@ -1,7 +1,7 @@
 import AppKit
 import MarkDownerCore
 
-/// Left sidebar: document outline (headings) and a folder browser.
+/// Left sidebar: document outline (headings), a folder browser, folder search and review comments.
 final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSOutlineViewDataSource, NSOutlineViewDelegate {
 
     struct Heading: Equatable {
@@ -21,6 +21,9 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSO
     private let folderButton = NSButton()
     private let emptyLabel = NSTextField(labelWithString: "")
     let searchView = FolderSearchView(frame: .zero)
+    let reviewView = ReviewPanelView(frame: .zero)
+
+    static let commentsTab = 3
 
     private(set) var headings: [Heading] = []
     private var currentHeadingIndex: Int?
@@ -41,16 +44,17 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSO
         background.translatesAutoresizingMaskIntoConstraints = false
         addSubview(background)
 
-        tabs.segmentCount = 3
+        tabs.segmentCount = 4
         tabs.setLabel(L("sidebar.outline", "Outline"), forSegment: 0)
         tabs.setLabel(L("sidebar.files", "Files"), forSegment: 1)
         tabs.setLabel(L("sidebar.search", "Search"), forSegment: 2)
+        tabs.setLabel(L("sidebar.comments", "Comments"), forSegment: Self.commentsTab)
         searchView.folder = { [weak self] in self?.searchFolder }
         tabs.trackingMode = .selectOne
         tabs.segmentStyle = .automatic
         tabs.target = self
         tabs.action = #selector(tabChanged)
-        tabs.selectedSegment = Settings.shared.sidebarTab
+        tabs.selectedSegment = min(max(0, Settings.shared.sidebarTab), Self.commentsTab)
         tabs.translatesAutoresizingMaskIntoConstraints = false
         tabs.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
@@ -105,7 +109,8 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSO
         emptyLabel.stringValue = L("sidebar.noHeadings", "No headings")
 
         searchView.translatesAutoresizingMaskIntoConstraints = false
-        for v in [tabs, outlineScroll, filesScroll, folderButton, emptyLabel, searchView] as [NSView] { addSubview(v) }
+        reviewView.translatesAutoresizingMaskIntoConstraints = false
+        for v in [tabs, outlineScroll, filesScroll, folderButton, emptyLabel, searchView, reviewView] as [NSView] { addSubview(v) }
         NSLayoutConstraint.activate([
             background.leadingAnchor.constraint(equalTo: leadingAnchor),
             background.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -129,6 +134,10 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSO
             searchView.leadingAnchor.constraint(equalTo: leadingAnchor),
             searchView.trailingAnchor.constraint(equalTo: trailingAnchor),
             searchView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            reviewView.topAnchor.constraint(equalTo: tabs.bottomAnchor, constant: 6),
+            reviewView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            reviewView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            reviewView.bottomAnchor.constraint(equalTo: bottomAnchor),
             emptyLabel.centerXAnchor.constraint(equalTo: outlineScroll.centerXAnchor),
             emptyLabel.topAnchor.constraint(equalTo: outlineScroll.topAnchor, constant: 24),
         ])
@@ -153,11 +162,14 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSO
     private func updateTab() {
         let files = tabs.selectedSegment == 1
         let search = tabs.selectedSegment == 2
-        outlineScroll.isHidden = files || search
-        emptyLabel.isHidden = files || search || !headings.isEmpty
+        let comments = tabs.selectedSegment == Self.commentsTab
+        outlineScroll.isHidden = files || search || comments
+        emptyLabel.isHidden = files || search || comments || !headings.isEmpty
         filesScroll.isHidden = !files
         folderButton.isHidden = !files
         searchView.isHidden = !search
+        reviewView.isHidden = !comments
+        if comments { reviewView.becameVisible() }
         if files && rootNode == nil, let folder = Settings.shared.sidebarFolder ?? currentFile?.deletingLastPathComponent() {
             setFolder(folder)
         }
