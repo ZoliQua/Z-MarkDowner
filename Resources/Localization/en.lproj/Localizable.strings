@@ -189,6 +189,8 @@
 "menu.window" = "Window";
 "menu.zoom" = "Zoom";
 "panel.chooseImage" = "Choose images to insert";
+"pdf.commentPage" = "p. %d";
+"pdf.commentsSection" = "Comments";
 "pdf.locked" = "The PDF is password-protected, so its text could not be read.";
 "pdf.noText" = "The PDF contains no extractable text.";
 "pdf.noTextOnPage" = "No text could be recognised on page %d.";

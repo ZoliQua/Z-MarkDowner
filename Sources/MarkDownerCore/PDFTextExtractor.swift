@@ -47,6 +47,11 @@ public enum PDFTextExtractor {
     static let ocrCharacterThreshold = 20
 
     public static func extract(_ document: PDFDocument, ocr: Bool = true) -> PDFExtraction {
+        extract(document, ocr: ocr, includeAnnotations: DocumentImporter.revisionMode == .markup)
+    }
+
+    /// With `includeAnnotations`, the reviewers' annotations are written into the Markdown as CriticMarkup.
+    public static func extract(_ document: PDFDocument, ocr: Bool = true, includeAnnotations: Bool) -> PDFExtraction {
         if document.isLocked {
             return PDFExtraction(markdown: "", lines: [], ocrPages: [], warnings: [CoreStrings.pdfLocked])
         }
@@ -77,7 +82,10 @@ public enum PDFTextExtractor {
 
         let ordered = cleanLines(pages, pageBounds: pageBounds).flatMap(readingOrder)
         if document.pageCount > 0 && ordered.isEmpty { warnings.append(CoreStrings.pdfNoText) }
-        let markdown = frontMatter(of: document) + render(ordered)
+        var markdown = frontMatter(of: document) + render(ordered)
+        if includeAnnotations {
+            markdown = addingReviewMarks(from: PDFReviewExtractor.comments(from: document), to: markdown)
+        }
         return PDFExtraction(markdown: markdown, lines: ordered, ocrPages: ocrPages, warnings: warnings)
     }
 
@@ -583,5 +591,109 @@ public enum PDFTextExtractor {
             || "!&*[]{}|>'\"%@`#,?-".contains(value.first ?? " ")
         guard special else { return value }
         return "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+    }
+}
+
+// MARK: Review marks
+
+extension PDFTextExtractor {
+
+    private static let linePrefix = try! NSRegularExpression(pattern: #"^[ \t]*(?:#{1,6}[ \t]+|>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+)+"#)
+
+    /// `markdown` with every comment that can be placed written in as CriticMarkup; the others are
+    /// listed in a final "Comments" section.
+    static func addingReviewMarks(from comments: [ReviewComment], to markdown: String) -> String {
+        guard !comments.isEmpty else { return markdown }
+        let normalized = NormalizedText(source: markdown, format: .markdown)
+        let source = markdown as NSString
+        var placed: [(range: NSRange, comment: ReviewComment)] = []
+        var unplaced: [ReviewComment] = []
+        for comment in comments {
+            if let range = ReviewAnchor.locate(comment, in: normalized) {
+                placed.append((range, comment))
+            } else {
+                unplaced.append(comment)
+            }
+        }
+        let adjusted = insertionRanges(for: placed.map(\.range), in: markdown)
+        var items = zip(adjusted, placed.map(\.comment)).map { (range: $0, comment: $1) }
+        items.sort { $0.range.location < $1.range.location }
+
+        var accepted: [(range: NSRange, comment: ReviewComment)] = []
+        var end = 0
+        for item in items {
+            if item.range.location < end {
+                unplaced.append(item.comment)
+                continue
+            }
+            accepted.append(item)
+            end = NSMaxRange(item.range)
+        }
+
+        var result = markdown
+        for item in accepted.reversed() {
+            let quote = source.substring(with: item.range)
+            let mark = reviewMark(for: item.comment, quote: quote)
+            guard !mark.isEmpty else { continue }
+            result = (result as NSString).replacingCharacters(in: item.range, with: mark)
+        }
+        let listed = unplaced.sorted { ($0.page, $0.id) < ($1.page, $1.id) }.compactMap(commentLine)
+        if !listed.isEmpty {
+            result = result.trimmingCharacters(in: .newlines) + "\n\n## \(CoreStrings.pdfCommentsSection)\n\n" + listed.joined(separator: "\n") + "\n"
+        }
+        return result
+    }
+
+    /// The CriticMarkup for one comment around the text it marks (`quote`, empty at an insertion point).
+    static func reviewMark(for comment: ReviewComment, quote: String) -> String {
+        let escaped = comment.comment.replacingOccurrences(of: "<<}", with: "<< }")
+        let note = escaped.isEmpty ? "" : "{>>\(comment.author.isEmpty ? "" : comment.author + ": ")\(escaped)<<}"
+        guard !quote.isEmpty else { return note }
+        var mark: String
+        switch comment.kind {
+        case .strikeOut: mark = "{--\(quote)--}" + note
+        case .caret, .note, .freeText: return quote + note
+        case .highlight, .underline, .squiggly:
+            mark = "{==\(quote)==}" + note
+            if case .insertAfter(_, let text)? = comment.suggestion, comment.kind == .highlight, !text.isEmpty {
+                mark += "{++\(text)++}"
+            }
+        }
+        return mark
+    }
+
+    /// Narrows source ranges so that a mark never starts inside a Markdown line prefix ("# ", "- ", "1. ", "> ")
+    /// or runs across a paragraph break.
+    static func insertionRanges(for ranges: [NSRange], in markdown: String) -> [NSRange] {
+        let source = markdown as NSString
+        return ranges.map { original in
+            var range = original
+            guard range.location <= source.length else { return NSRange(location: source.length, length: 0) }
+            range.length = min(range.length, source.length - range.location)
+            let lineStart = source.lineRange(for: NSRange(location: range.location, length: 0)).location
+            let lineLength = source.lineRange(for: NSRange(location: lineStart, length: 0)).length
+            if let match = linePrefix.firstMatch(in: markdown, range: NSRange(location: lineStart, length: lineLength)) {
+                let prefixEnd = NSMaxRange(match.range)
+                if range.location < prefixEnd {
+                    let cut = min(prefixEnd - range.location, range.length)
+                    range.location += cut
+                    range.length -= cut
+                    if range.length == 0 && original.length > 0 { range.location = prefixEnd }
+                }
+            }
+            if range.length > 0 {
+                let paragraph = source.range(of: "\n\n", range: range)
+                if paragraph.location != NSNotFound { range.length = paragraph.location - range.location }
+            }
+            return range
+        }
+    }
+
+    private static func commentLine(_ comment: ReviewComment) -> String? {
+        let text = comment.comment.isEmpty ? comment.quotedText : comment.comment
+        guard !text.isEmpty else { return nil }
+        let page = CoreStrings.pdfCommentPage(comment.page + 1)
+        let lead = comment.author.isEmpty ? "\(page): " : "\(page), \(comment.author): "
+        return "- " + lead + text.replacingOccurrences(of: "\n", with: " ")
     }
 }

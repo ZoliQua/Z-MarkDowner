@@ -50,6 +50,73 @@ final class PDFReviewTests: XCTestCase {
         XCTAssertTrue(comments.allSatisfy { $0.status == .open && !$0.suggestionIsAI && $0.reply.isEmpty })
     }
 
+    // MARK: Import as review marks
+
+    private func annotatedSample() -> PDFDocument {
+        let doc = SyntheticPDF.make(pages: [[body("Results show bugs in current tools for visualization.")]])
+        let page = doc.page(at: 0)!
+        let bugs = SyntheticPDF.bounds(of: "bugs", in: doc)
+        let current = SyntheticPDF.bounds(of: "current", in: doc)
+        page.addAnnotation(SyntheticPDF.markup(.highlight, over: [bugs], contents: #"Change "bugs" to "regressions"."#, author: "Reviewer"))
+        page.addAnnotation(SyntheticPDF.markup(.strikeOut, over: [current], author: "Reviewer"))
+        return SyntheticPDF.reloaded(doc)
+    }
+
+    func testImportedPDFContainsReviewMarks() {
+        let doc = annotatedSample()
+        let marked = PDFTextExtractor.extract(doc, ocr: false, includeAnnotations: true).markdown
+        XCTAssertTrue(marked.contains(#"{==bugs==}{>>Reviewer: Change "bugs" to "regressions".<<}"#), marked)
+        XCTAssertTrue(marked.contains("{--current--}"), marked)
+        XCTAssertFalse(marked.contains("## "), marked)
+        let plain = PDFTextExtractor.extract(doc, ocr: false, includeAnnotations: false).markdown
+        XCTAssertFalse(plain.contains("{=="), plain)
+        XCTAssertFalse(plain.contains("{--"), plain)
+        XCTAssertFalse(plain.contains("{>>"), plain)
+    }
+
+    func testReviewMarksDefaultFollowsRevisionMode() {
+        let saved = DocumentImporter.revisionMode
+        defer { DocumentImporter.revisionMode = saved }
+        let doc = annotatedSample()
+        DocumentImporter.revisionMode = .markup
+        XCTAssertTrue(PDFTextExtractor.extract(doc, ocr: false).markdown.contains("{=="))
+        DocumentImporter.revisionMode = .accept
+        XCTAssertFalse(PDFTextExtractor.extract(doc, ocr: false).markdown.contains("{=="))
+    }
+
+    func testUnanchoredCommentsGoToCommentsSection() {
+        let doc = SyntheticPDF.make(pages: [[body("Results show bugs in current tools for visualization.")]])
+        let note = PDFAnnotation(bounds: CGRect(x: 400, y: 100, width: 20, height: 20), forType: .text, withProperties: nil)
+        note.contents = "Please cite the original study."
+        note.userName = "Reviewer"
+        doc.page(at: 0)!.addAnnotation(note)
+        let marked = PDFTextExtractor.extract(SyntheticPDF.reloaded(doc), ocr: false, includeAnnotations: true).markdown
+        XCTAssertTrue(marked.contains("## Comments"), marked)
+        XCTAssertTrue(marked.contains("- p. 1, Reviewer: Please cite the original study."), marked)
+        XCTAssertFalse(marked.contains("{>>"), marked)
+    }
+
+    func testReviewMarkFormatting() {
+        let c = ReviewComment(id: "p0-0", page: 0, author: "A", kind: .highlight, quotedText: "bugs", comment: "x <<} y")
+        XCTAssertEqual(PDFTextExtractor.reviewMark(for: c, quote: "bugs"), "{==bugs==}{>>A: x << } y<<}")
+        let bare = ReviewComment(id: "p0-0", page: 0, kind: .underline, quotedText: "bugs")
+        XCTAssertEqual(PDFTextExtractor.reviewMark(for: bare, quote: "bugs"), "{==bugs==}")
+        let strike = ReviewComment(id: "p0-0", page: 0, author: "A", kind: .strikeOut, quotedText: "bugs", comment: "no")
+        XCTAssertEqual(PDFTextExtractor.reviewMark(for: strike, quote: "bugs"), "{--bugs--}{>>A: no<<}")
+        let caret = ReviewComment(id: "p0-0", page: 0, author: "A", kind: .caret, comment: ", however,")
+        XCTAssertEqual(PDFTextExtractor.reviewMark(for: caret, quote: ""), "{>>A: , however,<<}")
+        let insert = ReviewComment(id: "p0-0", page: 0, kind: .highlight, quotedText: "tools", comment: "add",
+                                   suggestion: .insertAfter(target: "tools", text: " here"))
+        XCTAssertEqual(PDFTextExtractor.reviewMark(for: insert, quote: "tools"), "{==tools==}{>>add<<}{++ here++}")
+    }
+
+    func testMarksAvoidMarkdownLinePrefix() {
+        let source = "# Title words\n\n- first item here\n"
+        let ranges = PDFTextExtractor.insertionRanges(for: [NSRange(location: 0, length: 7), NSRange(location: 15, length: 8)], in: source)
+        XCTAssertEqual(ranges[0], NSRange(location: 2, length: 5))
+        XCTAssertEqual(ranges[1], NSRange(location: 17, length: 6))
+    }
+
     func testCaretInsertsAfterPrecedingWord() {
         let doc = SyntheticPDF.make(pages: [[body("Results show bugs in current tools for visualization.")]])
         let tools = SyntheticPDF.bounds(of: "tools", in: doc)

@@ -74,5 +74,7 @@ enum CoreStrings {
     static let pdfLocked = L("pdf.locked", "The PDF is password-protected, so its text could not be read.")
     static func pdfNoTextOnPage(_ page: Int) -> String { LF("pdf.noTextOnPage", "No text could be recognised on page %d.", page) }
     static func pdfOCRPages(_ n: Int) -> String { LF("pdf.ocrPages", "Text recognised with OCR on %d pages.", n) }
+    static let pdfCommentsSection = L("pdf.commentsSection", "Comments")
+    static func pdfCommentPage(_ page: Int) -> String { LF("pdf.commentPage", "p. %d", page) }
     static let pdfNoText = L("pdf.noText", "The PDF contains no extractable text.")
 }
