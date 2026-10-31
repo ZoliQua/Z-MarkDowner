@@ -261,6 +261,15 @@
 "prefs.wordTemplateNote" = "A .dotx or .docx file whose styles, page setup, headers and footers are used for Word export (front matter: reference-doc).";
 "prefs.writing" = "Writing";
 "preview.accessibility" = "Rendered document";
+"review.error.noSuggestion" = "The comment has no suggestion to apply.";
+"review.error.targetChanged" = "The text “%@” is no longer where the comment points. The source may have been edited.";
+"review.error.unanchored" = "The comment could not be found in the source.";
+"review.letter.reply" = "Reply";
+"review.letter.status" = "Status";
+"review.status.applied" = "Applied";
+"review.status.done" = "Done";
+"review.status.open" = "Open";
+"review.status.rejected" = "Rejected";
 "search.caseSensitive" = "Match case";
 "search.confirmText" = "Open documents can be restored with Undo; files that are not open are saved immediately.";
 "search.confirmTitle" = "Replace %d matches in %d files?";

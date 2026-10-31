@@ -646,8 +646,7 @@ extension PDFTextExtractor {
 
     /// The CriticMarkup for one comment around the text it marks (`quote`, empty at an insertion point).
     static func reviewMark(for comment: ReviewComment, quote: String) -> String {
-        let escaped = singleLine(comment.comment).replacingOccurrences(of: "<<}", with: "<< }")
-        let note = escaped.isEmpty ? "" : "{>>\(comment.author.isEmpty ? "" : singleLine(comment.author).replacingOccurrences(of: "<<}", with: "<< }") + ": ")\(escaped)<<}"
+        let note = reviewNote(for: comment)
         guard !quote.isEmpty else { return note }
         var mark: String
         switch comment.kind {
@@ -660,6 +659,14 @@ extension PDFTextExtractor {
             }
         }
         return mark
+    }
+
+    /// `{>>Author: comment<<}` on one line, or "" when the comment has no text.
+    static func reviewNote(for comment: ReviewComment) -> String {
+        let escaped = singleLine(comment.comment).replacingOccurrences(of: "<<}", with: "<< }")
+        guard !escaped.isEmpty else { return "" }
+        let author = singleLine(comment.author).replacingOccurrences(of: "<<}", with: "<< }")
+        return "{>>\(author.isEmpty ? "" : author + ": ")\(escaped)<<}"
     }
 
     /// Narrows source ranges so that a mark never starts inside a Markdown line prefix ("# ", "- ", "1. ", "> ")
@@ -714,7 +721,7 @@ extension PDFTextExtractor {
         return NSRange(location: start, length: end - start)
     }
 
-    private static func singleLine(_ text: String) -> String {
+    static func singleLine(_ text: String) -> String {
         text.replacingOccurrences(of: #"\s*[\r\n]+\s*"#, with: " ", options: .regularExpression)
     }
 
