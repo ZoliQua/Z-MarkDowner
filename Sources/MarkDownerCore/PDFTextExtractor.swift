@@ -367,6 +367,8 @@ public enum PDFTextExtractor {
     private struct Block {
         var lines: [PDFLine]
         var list: ListMarker?
+        /// The list marker as printed ("•", "2.", "a)").
+        var marker = ""
         var text = ""
         var fontSize: CGFloat { lines.first?.fontSize ?? 0 }
         var isBold: Bool { lines.allSatisfy(\.isBold) }
@@ -392,7 +394,7 @@ public enum PDFTextExtractor {
         return weights.max { $0.value == $1.value ? $0.key > $1.key : $0.value < $1.value }?.key ?? 0
     }
 
-    private static func listMarker(_ text: String) -> (marker: ListMarker, rest: String)? {
+    private static func listMarker(_ text: String) -> (list: ListMarker, marker: String, rest: String)? {
         let patterns: [(String, Bool)] = [(#"^[•–▪]\s*"#, false), (#"^-\s+"#, false),
                                           (#"^\d{1,3}[.)]\s+"#, true), (#"^[a-zA-Z]\)\s+"#, true)]
         for (pattern, ordered) in patterns {
@@ -400,7 +402,7 @@ public enum PDFTextExtractor {
             let rest = String(text[range.upperBound...])
             guard !rest.isEmpty else { return nil }
             let marker = text[range].trimmingCharacters(in: .whitespaces)
-            return (ordered ? .ordered(marker) : .bullet, rest)
+            return (ordered ? .ordered(marker) : .bullet, marker, rest)
         }
         return nil
     }
@@ -458,61 +460,74 @@ public enum PDFTextExtractor {
         }
 
         var blocks: [Block] = []
+        // A marker starts a list item only where a new block may begin ("•" and "▪" always do), so a
+        // wrapped line that happens to start with "5. " stays in its paragraph.
         for line in lines {
-            let item = line.fontSize < body * 1.15 ? listMarker(line.text) : nil
-            if item == nil, let previous = blocks.last?.lines.last, !startsNewBlock(previous, line) {
+            let previous = blocks.last?.lines.last
+            var item = line.fontSize < body * 1.15 ? listMarker(line.text) : nil
+            if let found = item, let previous,
+               !(found.marker == "•" || found.marker == "▪" || blocks.last?.list != nil
+                 || endsSentence(previous.text) || startsNewBlock(previous, line)) {
+                item = nil
+            }
+            if item == nil, let previous, !startsNewBlock(previous, line) {
                 blocks[blocks.count - 1].lines.append(line)
             } else {
-                var block = Block(lines: [line], list: item?.marker)
-                if let item { block.lines[0].text = item.rest }
+                var block = Block(lines: [line], list: item?.list)
+                if let item {
+                    block.marker = item.marker
+                    block.lines[0].text = item.rest
+                }
                 blocks.append(block)
             }
         }
         for i in blocks.indices { blocks[i].text = joined(blocks[i].lines.map(\.text)) }
 
+        /// Short blocks not ending with "."; numbered lines ("2. Methods") qualify and keep their number.
         func isHeadingCandidate(_ block: Block) -> Bool {
-            block.list == nil && block.lines.count <= 2 && block.text.count <= 150 && !block.text.hasSuffix(".")
+            if block.list == .bullet { return false }
+            return block.lines.count <= 2 && block.text.count <= 150 && !block.text.hasSuffix(".")
         }
         let headingSizes = blocks.filter { isHeadingCandidate($0) && $0.fontSize >= body * 1.15 }.map { rounded($0.fontSize) }
         let levels = Array(Set(headingSizes)).sorted(by: >)
 
-        var out: [String] = []
+        var out: [(text: String, isItem: Bool)] = []
         for (i, block) in blocks.enumerated() {
             let text = AttributedToMarkdown.escape(block.text)
+            let headingText = block.marker.isEmpty ? text : AttributedToMarkdown.escape(block.marker) + " " + text
             if isHeadingCandidate(block), block.fontSize >= body * 1.15, let rank = levels.firstIndex(of: rounded(block.fontSize)) {
-                out.append(String(repeating: "#", count: min(rank + 1, 3)) + " " + text)
+                out.append((String(repeating: "#", count: min(rank + 1, 3)) + " " + headingText, false))
                 continue
             }
             if isHeadingCandidate(block), block.isBold, abs(block.fontSize - body) <= body * 0.1, i + 1 < blocks.count {
                 let next = blocks[i + 1]
                 if next.list == nil, !isHeadingCandidate(next) || next.text.hasSuffix("."), !next.isBold,
                    next.fontSize < body * 1.15 {
-                    out.append("### " + text)
+                    out.append(("### " + headingText, false))
                     continue
                 }
             }
             switch block.list {
             case .bullet:
-                out.append("- " + text)
+                out.append(("- " + text, true))
             case .ordered(let marker):
                 if marker.first?.isNumber == true {
                     let number = marker.prefix { $0.isNumber }
-                    out.append("\(number). " + text)
+                    out.append(("\(number). " + text, true))
                 } else {
-                    out.append("- " + marker + " " + text)
+                    out.append(("- " + marker + " " + text, true))
                 }
             case nil:
-                out.append(AttributedToMarkdown.escapeLineStart(text))
+                out.append((AttributedToMarkdown.escapeLineStart(text), false))
             }
         }
 
         var markdown = ""
         for (i, chunk) in out.enumerated() {
             if i > 0 {
-                let bothItems = blocks[i - 1].list != nil && blocks[i].list != nil
-                markdown += bothItems ? "\n" : "\n\n"
+                markdown += out[i - 1].isItem && chunk.isItem ? "\n" : "\n\n"
             }
-            markdown += chunk
+            markdown += chunk.text
         }
         return markdown + "\n"
     }

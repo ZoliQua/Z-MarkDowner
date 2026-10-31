@@ -52,6 +52,11 @@ public enum DocumentImporter {
             guard let document = PDFDocument(url: url) else {
                 throw ImportError.unreadable(url.lastPathComponent, underlying: nil)
             }
+            if document.isLocked {
+                let reason = NSError(domain: "MarkDownerCore.PDF", code: 1,
+                                     userInfo: [NSLocalizedDescriptionKey: CoreStrings.pdfLocked])
+                throw ImportError.unreadable(url.lastPathComponent, underlying: reason)
+            }
             return PDFTextExtractor.extract(document).markdown
         }
 

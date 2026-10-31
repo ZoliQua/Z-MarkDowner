@@ -146,6 +146,38 @@ final class PDFImportTests: XCTestCase {
         XCTAssertTrue(markdown.hasPrefix("### Data sources\n\n"), markdown)
     }
 
+    func testNumberedBoldLineBecomesHeading() {
+        let doc = SyntheticPDF.make(pages: [[
+            ("2. Methods", 11, true),
+            body("We used three public databases for the analysis of"),
+            body("orthologous genes."),
+        ]])
+        let markdown = PDFTextExtractor.extract(doc).markdown
+        XCTAssertTrue(markdown.hasPrefix("### 2. Methods\n\n"), markdown)
+    }
+
+    func testWrappedLineStartingWithNumberStaysInParagraph() {
+        let doc = SyntheticPDF.make(pages: [[
+            body("The cohort was followed for a period of more than"),
+            body("5. years in total, and the results were consistent."),
+        ]])
+        let markdown = PDFTextExtractor.extract(doc).markdown
+        XCTAssertEqual(paragraphs(markdown), ["The cohort was followed for a period of more than 5. years in total, and the results were consistent."])
+    }
+
+    func testImporterRejectsLockedPDF() throws {
+        let doc = SyntheticPDF.make(pages: [[body("A secret text in a locked file.")]])
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathComponent("locked.pdf")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        XCTAssertTrue(doc.write(to: url, withOptions: [.userPasswordOption: "user", .ownerPasswordOption: "owner"]))
+        XCTAssertTrue(PDFDocument(url: url)?.isLocked ?? false)
+        XCTAssertThrowsError(try DocumentImporter.markdown(fromFileAt: url)) { error in
+            XCTAssertTrue(error.localizedDescription.contains(CoreStrings.pdfLocked), error.localizedDescription)
+        }
+    }
+
     func testImporterRoutesPDF() throws {
         let doc = SyntheticPDF.make(pages: [[body("Imported from a PDF file.")]])
         let url = FileManager.default.temporaryDirectory
