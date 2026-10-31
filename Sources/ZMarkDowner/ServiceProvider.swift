@@ -29,7 +29,7 @@ final class ServiceProvider: NSObject {
 
     private func fileURLs(_ pboard: NSPasteboard) -> [URL] {
         (pboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? [])
-            .filter { DocumentImporter.supportedExtensions.contains($0.pathExtension.lowercased()) }
+            .filter { DocumentImporter.importableExtensions.contains($0.pathExtension.lowercased()) }
     }
 
     private func run(_ pboard: NSPasteboard, _ format: DocumentConverter.Format) {

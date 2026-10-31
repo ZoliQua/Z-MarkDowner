@@ -61,23 +61,26 @@ public enum PDFTextExtractor {
         var warnings: [String] = []
         let languages = ocr ? PDFOCR.preferredLanguages : []
         for index in 0..<document.pageCount {
-            guard let page = document.page(at: index) else {
-                pages.append([])
-                pageBounds.append(.zero)
-                continue
-            }
-            var lines = readLines(of: page, index: index)
-            if ocr, lines.reduce(0, { $0 + $1.text.count }) < ocrCharacterThreshold {
-                let recognized = PDFOCR.recognize(page, pageIndex: index, languages: languages)
-                if recognized.isEmpty {
-                    warnings.append(CoreStrings.pdfNoTextOnPage(index + 1))
-                } else {
-                    lines = recognized
-                    ocrPages.append(index)
+            // Text selections and OCR bitmaps of a page are released before the next page is read.
+            autoreleasepool {
+                guard let page = document.page(at: index) else {
+                    pages.append([])
+                    pageBounds.append(.zero)
+                    return
                 }
+                var lines = readLines(of: page, index: index)
+                if ocr, lines.reduce(0, { $0 + $1.text.count }) < ocrCharacterThreshold {
+                    let recognized = PDFOCR.recognize(page, pageIndex: index, languages: languages)
+                    if recognized.isEmpty {
+                        warnings.append(CoreStrings.pdfNoTextOnPage(index + 1))
+                    } else {
+                        lines = recognized
+                        ocrPages.append(index)
+                    }
+                }
+                pages.append(lines)
+                pageBounds.append(page.bounds(for: .mediaBox))
             }
-            pages.append(lines)
-            pageBounds.append(page.bounds(for: .mediaBox))
         }
 
         let ordered = cleanLines(pages, pageBounds: pageBounds).flatMap(readingOrder)
@@ -94,9 +97,11 @@ public enum PDFTextExtractor {
         var pages: [[PDFLine]] = []
         var pageBounds: [CGRect] = []
         for index in 0..<document.pageCount {
-            let page = document.page(at: index)
-            pages.append(page.map { readLines(of: $0, index: index) } ?? [])
-            pageBounds.append(page?.bounds(for: .mediaBox) ?? .zero)
+            autoreleasepool {
+                let page = document.page(at: index)
+                pages.append(page.map { readLines(of: $0, index: index) } ?? [])
+                pageBounds.append(page?.bounds(for: .mediaBox) ?? .zero)
+            }
         }
         return cleanLines(pages, pageBounds: pageBounds).map(readingOrder)
     }

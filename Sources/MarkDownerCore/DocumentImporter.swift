@@ -30,30 +30,42 @@ public enum DocumentImporter {
 
     public static var revisionMode: RevisionMode = .markup
 
-    /// User-visible notes about the last import (for PDFs: OCR use, pages without text). Reset by every
-    /// `markdown(fromFileAt:)` call.
-    public static var lastImportWarnings: [String] = []
-
     public static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn"]
     public static let plainTextExtensions: Set<String> = ["txt", "text"]
-    public static let richTextExtensions: Set<String> = ["rtf", "rtfd", "doc", "docx", "odt", "html", "htm", "pdf"]
+    public static let richTextExtensions: Set<String> = ["rtf", "rtfd", "doc", "docx", "odt", "html", "htm"]
+    public static let pdfExtensions: Set<String> = ["pdf"]
 
+    /// Formats opened as documents everywhere (preview links, folder drops, Batch Convert folders).
     public static var supportedExtensions: Set<String> {
         markdownExtensions.union(plainTextExtensions).union(richTextExtensions)
     }
 
+    /// Formats that can be imported when chosen explicitly: `supportedExtensions` plus PDF.
+    public static var importableExtensions: Set<String> {
+        supportedExtensions.union(pdfExtensions)
+    }
+
+    /// The Markdown of a file, using the global `revisionMode`; warnings are dropped (see `importResult`).
     public static func markdown(fromFileAt url: URL) throws -> String {
-        lastImportWarnings = []
+        try importResult(fromFileAt: url, revisionMode: revisionMode).markdown
+    }
+
+    /// Imports a file as Markdown with the user-visible notes about it (for PDFs: OCR use, pages without
+    /// text). Uses no shared state, so it may run on any thread for Markdown, plain text, PDF and DOCX files;
+    /// the AppKit readers (RTF, DOC, ODT, HTML) need the main thread. `includePDFAnnotations: false` leaves
+    /// a PDF's annotations out even with `.markup`.
+    public static func importResult(fromFileAt url: URL, revisionMode: RevisionMode,
+                                    includePDFAnnotations: Bool = true) throws -> (markdown: String, warnings: [String]) {
         let ext = url.pathExtension.lowercased()
         if markdownExtensions.contains(ext) || plainTextExtensions.contains(ext) || ext.isEmpty {
             let data: Data
             do { data = try Data(contentsOf: url) } catch {
                 throw ImportError.unreadable(url.lastPathComponent, underlying: error)
             }
-            return decodeText(data)
+            return (decodeText(data), [])
         }
 
-        if ext == "pdf" {
+        if pdfExtensions.contains(ext) {
             guard let document = PDFDocument(url: url) else {
                 throw ImportError.unreadable(url.lastPathComponent, underlying: nil)
             }
@@ -62,12 +74,16 @@ public enum DocumentImporter {
                                      userInfo: [NSLocalizedDescriptionKey: CoreStrings.pdfLocked])
                 throw ImportError.unreadable(url.lastPathComponent, underlying: reason)
             }
-            let extraction = PDFTextExtractor.extract(document)
-            lastImportWarnings = extraction.warnings
-            if !extraction.ocrPages.isEmpty { lastImportWarnings.append(CoreStrings.pdfOCRPages(extraction.ocrPages.count)) }
-            return extraction.markdown
+            let extraction = PDFTextExtractor.extract(document, includeAnnotations: includePDFAnnotations && revisionMode == .markup)
+            var warnings = extraction.warnings
+            if !extraction.ocrPages.isEmpty { warnings.append(CoreStrings.pdfOCRPages(extraction.ocrPages.count)) }
+            return (extraction.markdown, warnings)
         }
 
+        return (try richTextMarkdown(fromFileAt: url, ext: ext, revisionMode: revisionMode), [])
+    }
+
+    private static func richTextMarkdown(fromFileAt url: URL, ext: String, revisionMode: RevisionMode) throws -> String {
         if ext == "docx" {
             do {
                 return try DocxReader.markdown(from: Data(contentsOf: url), revisions: revisionMode)

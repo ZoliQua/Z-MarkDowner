@@ -95,6 +95,15 @@ final class BatchConvertWindowController: NSWindowController, NSTableViewDataSou
     // MARK: Adding files
 
     private func add(_ urls: [URL]) {
+        files = Self.collect(urls, adding: files)
+        table.reloadData()
+        statusLabel.stringValue = LF("batch.count", "%d files", files.count)
+    }
+
+    /// `existing` followed by the new files: explicitly chosen files of any importable format (PDF too),
+    /// and from folders only the formats opened as documents (PDFs inside folders are skipped).
+    static func collect(_ urls: [URL], adding existing: [URL]) -> [URL] {
+        var files = existing
         for url in urls {
             var isDir: ObjCBool = false
             FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
@@ -105,18 +114,17 @@ final class BatchConvertWindowController: NSWindowController, NSTableViewDataSou
                         files.append(item)
                     }
                 }
-            } else if DocumentImporter.supportedExtensions.contains(url.pathExtension.lowercased()), !files.contains(url) {
+            } else if DocumentImporter.importableExtensions.contains(url.pathExtension.lowercased()), !files.contains(url) {
                 files.append(url)
             }
         }
-        table.reloadData()
-        statusLabel.stringValue = LF("batch.count", "%d files", files.count)
+        return files
     }
 
     @objc private func addFiles() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
-        panel.allowedContentTypes = DocumentImporter.supportedExtensions.compactMap { .init(filenameExtension: $0) }
+        panel.allowedContentTypes = DocumentImporter.importableExtensions.compactMap { .init(filenameExtension: $0) }
         guard let window else { return }
         panel.beginSheetModal(for: window) { [weak self] r in if r == .OK { self?.add(panel.urls) } }
     }

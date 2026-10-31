@@ -84,6 +84,20 @@ final class PDFReviewTests: XCTestCase {
         XCTAssertFalse(PDFTextExtractor.extract(doc, ocr: false).markdown.contains("{=="))
     }
 
+    func testImportResultCanLeaveAnnotationsOut() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathComponent("annotated.pdf")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        XCTAssertTrue(annotatedSample().write(to: url))
+        let marked = try DocumentImporter.importResult(fromFileAt: url, revisionMode: .markup)
+        XCTAssertTrue(marked.markdown.contains("{=="), marked.markdown)
+        let compared = try DocumentImporter.importResult(fromFileAt: url, revisionMode: .markup, includePDFAnnotations: false)
+        XCTAssertFalse(compared.markdown.contains("{=="), compared.markdown)
+        XCTAssertFalse(compared.markdown.contains("{--"), compared.markdown)
+        XCTAssertTrue(compared.markdown.contains("current tools"), compared.markdown)
+    }
+
     func testUnanchoredCommentsGoToCommentsSection() {
         let doc = SyntheticPDF.make(pages: [[body("Results show bugs in current tools for visualization.")]])
         let note = PDFAnnotation(bounds: CGRect(x: 400, y: 100, width: 20, height: 20), forType: .text, withProperties: nil)

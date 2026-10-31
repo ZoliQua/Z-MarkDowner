@@ -25,8 +25,10 @@ public enum PDFReviewExtractor {
         let lines = PDFTextExtractor.readingLines(of: document)
         var result: [ReviewComment] = []
         for index in 0..<document.pageCount {
-            guard let page = document.page(at: index) else { continue }
-            result += comments(on: page, index: index, lines: index < lines.count ? lines[index] : [], document: document)
+            autoreleasepool {
+                guard let page = document.page(at: index) else { return }
+                result += comments(on: page, index: index, lines: index < lines.count ? lines[index] : [], document: document)
+            }
         }
         return result
     }

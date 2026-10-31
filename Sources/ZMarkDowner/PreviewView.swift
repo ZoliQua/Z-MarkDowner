@@ -10,6 +10,12 @@ final class PreviewView: NSView, WKNavigationDelegate, WKScriptMessageHandler {
     /// Base URL of the preview page: relative links resolve against it and are mapped to the document folder.
     static let pageURL = URL(string: "zmd-doc://document/index.html")!
 
+    /// Whether a clicked link to a local file opens in the app (Markdown, text, Word…); other files,
+    /// PDFs among them, open in their default application.
+    static func opensLinkInApp(_ target: URL) -> Bool {
+        DocumentImporter.supportedExtensions.contains(target.pathExtension.lowercased())
+    }
+
     private let webView: WKWebView
     private var isLoaded = false
     private var pendingHTML: String?
@@ -202,7 +208,7 @@ final class PreviewView: NSView, WKNavigationDelegate, WKScriptMessageHandler {
                 if let base = baseDirectory {
                     let relative = String(url.path.dropFirst()).removingPercentEncoding ?? ""
                     let target = base.appendingPathComponent(relative)
-                    if DocumentImporter.supportedExtensions.contains(target.pathExtension.lowercased()) {
+                    if Self.opensLinkInApp(target) {
                         NSDocumentController.shared.openDocument(withContentsOf: target, display: true) { _, _, _ in }
                     } else {
                         NSWorkspace.shared.open(target)

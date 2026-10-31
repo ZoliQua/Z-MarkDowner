@@ -71,7 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = (DocumentImporter.supportedExtensions.union(["tex", "ltx"]))
+        panel.allowedContentTypes = (DocumentImporter.importableExtensions.union(["tex", "ltx"]))
             .sorted().compactMap { UTType(filenameExtension: $0) }
         panel.message = L("compare.chooseTwo", "Choose two documents to compare (or the old version first).")
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }

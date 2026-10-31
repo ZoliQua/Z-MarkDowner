@@ -342,6 +342,9 @@ final class FileNode: NSObject {
 
     func reset() { loaded = nil }
 
+    /// Files shown in the sidebar: every importable format and LaTeX sources.
+    static let listedExtensions = DocumentImporter.importableExtensions.union(["tex", "ltx"])
+
     var children: [FileNode] {
         if let loaded { return loaded }
         let keys: [URLResourceKey] = [.isDirectoryKey, .isHiddenKey, .isPackageKey]
@@ -351,7 +354,7 @@ final class FileNode: NSObject {
         for item in items {
             let values = try? item.resourceValues(forKeys: Set(keys))
             let dir = (values?.isDirectory ?? false) && !(values?.isPackage ?? false)
-            if dir || DocumentImporter.supportedExtensions.contains(item.pathExtension.lowercased()) {
+            if dir || Self.listedExtensions.contains(item.pathExtension.lowercased()) {
                 result.append(FileNode(url: item, isDirectory: dir))
             }
         }

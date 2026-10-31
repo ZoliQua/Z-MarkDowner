@@ -521,6 +521,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         sidebar.highlightHeading(forLine: line)
     }
 
+    /// The message shown in the status bar (empty once it has faded).
+    var displayedMessage: String { messageLabel.stringValue }
+
     func showMessage(_ message: String) {
         messageLabel.stringValue = message
         messageWork?.cancel()

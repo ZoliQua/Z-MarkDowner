@@ -185,7 +185,9 @@ final class PDFImportTests: XCTestCase {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         XCTAssertTrue(doc.write(to: url))
-        XCTAssertTrue(DocumentImporter.supportedExtensions.contains("pdf"))
+        XCTAssertTrue(DocumentImporter.importableExtensions.contains("pdf"))
+        XCTAssertFalse(DocumentImporter.supportedExtensions.contains("pdf"), "PDF links and folder drops keep the 2.1.0 behaviour")
+        XCTAssertTrue(DocumentImporter.importableExtensions.isSuperset(of: DocumentImporter.supportedExtensions))
         let markdown = try DocumentImporter.markdown(fromFileAt: url)
         XCTAssertTrue(markdown.contains("Imported from a PDF file."), markdown)
     }
@@ -216,8 +218,26 @@ final class PDFImportTests: XCTestCase {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         XCTAssertTrue(doc.write(to: url))
-        _ = try DocumentImporter.markdown(fromFileAt: url)
-        XCTAssertEqual(DocumentImporter.lastImportWarnings, [CoreStrings.pdfOCRPages(1)], "\(DocumentImporter.lastImportWarnings)")
+        let result = try DocumentImporter.importResult(fromFileAt: url, revisionMode: .markup)
+        XCTAssertEqual(result.warnings, [CoreStrings.pdfOCRPages(1)], "\(result.warnings)")
+    }
+
+    func testConcurrentImportsKeepTheirOwnWarnings() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let scan = dir.appendingPathComponent("scan.pdf"), text = dir.appendingPathComponent("text.pdf")
+        XCTAssertTrue(SyntheticPDF.makeScanned(pages: ["Scanned sample text"]).write(to: scan))
+        XCTAssertTrue(SyntheticPDF.make(pages: [[body("A page with a text layer.")]]).write(to: text))
+        let lock = NSLock()
+        var results: [Int: [String]] = [:]
+        DispatchQueue.concurrentPerform(iterations: 8) { i in
+            let r = try? DocumentImporter.importResult(fromFileAt: i % 2 == 0 ? scan : text, revisionMode: .markup)
+            lock.lock(); results[i] = r?.warnings; lock.unlock()
+        }
+        for i in 0..<8 {
+            XCTAssertEqual(results[i], i % 2 == 0 ? [CoreStrings.pdfOCRPages(1)] : [], "\(i): \(String(describing: results[i]))")
+        }
     }
 
     func testRecognitionLanguages() {

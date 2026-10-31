@@ -119,17 +119,22 @@ final class DiffWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// Text of a file for comparison: LaTeX and plain sources as they are, everything else through the importers.
+    /// A PDF's annotations are left out, so reviewers' notes do not show up as changes.
     static func text(ofFileAt url: URL) async throws -> String {
         let ext = url.pathExtension.lowercased()
         if SourceFormat(fileExtension: ext) == .latex {
             return DocumentImporter.decodeText(try Data(contentsOf: url))
         }
+        let mode = Settings.shared.revisionMode
         // The AppKit readers (RTF, DOC, ODT, HTML) need the main thread; the others can run in the background.
-        let background = Set(["pdf", "docx"]).union(DocumentImporter.markdownExtensions).union(DocumentImporter.plainTextExtensions)
+        let background = DocumentImporter.pdfExtensions.union(["docx"])
+            .union(DocumentImporter.markdownExtensions).union(DocumentImporter.plainTextExtensions)
         if background.contains(ext) {
-            return try await Task.detached(priority: .userInitiated) { try DocumentImporter.markdown(fromFileAt: url) }.value
+            return try await Task.detached(priority: .userInitiated) {
+                try DocumentImporter.importResult(fromFileAt: url, revisionMode: mode, includePDFAnnotations: false).markdown
+            }.value
         }
-        return try DocumentImporter.markdown(fromFileAt: url)
+        return try DocumentImporter.importResult(fromFileAt: url, revisionMode: mode, includePDFAnnotations: false).markdown
     }
 
     // MARK: - UI

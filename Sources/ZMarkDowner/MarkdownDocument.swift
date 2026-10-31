@@ -13,8 +13,9 @@ enum DocumentTypes {
     static let importOnly: Set<String> = [
         "public.rtf", "com.apple.rtfd", "com.microsoft.word.doc",
         "org.openxmlformats.wordprocessingml.document", "org.oasis-open.opendocument.text", "public.html",
-        "com.adobe.pdf",
+        pdf,
     ]
+    static let pdf = "com.adobe.pdf"
 }
 
 @objc(MarkdownDocument)
@@ -47,15 +48,20 @@ final class MarkdownDocument: NSDocument {
         fileType = DocumentTypes.markdown
     }
 
-    /// Creates an untitled Markdown document from a file in another format (DOCX, DOC, RTF…),
-    /// so the original file is never overwritten.
+    /// Creates an untitled Markdown document from a file in another format (DOCX, DOC, RTF, PDF…),
+    /// so the original file is never overwritten. Runs off the main thread for PDFs
+    /// (see `canConcurrentlyReadDocuments`), so the change count is updated on the main thread.
     init(importing url: URL, ofType typeName: String) throws {
         super.init()
         try read(from: url, ofType: typeName)
         importedFrom = url
         sourceFormat = .markdown
         fileType = DocumentTypes.markdown
-        updateChangeCount(.changeDone)
+        if Thread.isMainThread {
+            updateChangeCount(.changeDone)
+        } else {
+            continueAsynchronousWorkOnMainThread { [self] in updateChangeCount(.changeDone) }
+        }
     }
 
     override class var autosavesInPlace: Bool { true }
@@ -96,13 +102,17 @@ final class MarkdownDocument: NSDocument {
             sourceFormat = .latex
             latexTypeName = typeName
         } else {
-            text = try DocumentImporter.markdown(fromFileAt: url)
-            pendingImportWarnings = DocumentImporter.lastImportWarnings
-            showPendingImportWarnings()
+            let imported = try DocumentImporter.importResult(fromFileAt: url, revisionMode: Settings.shared.revisionMode)
+            text = imported.markdown
+            pendingImportWarnings = imported.warnings
             sourceFormat = typeName == DocumentTypes.plainText ? .plain : .markdown
         }
         savedText = text
         savedDate = nil
+        // PDFs are read off the main thread when opened; their window does not exist yet then and
+        // `makeWindowControllers` shows the warnings on the main thread.
+        guard Thread.isMainThread else { return }
+        showPendingImportWarnings()
         windowController?.documentTextDidChangeExternally()
     }
 
@@ -125,7 +135,11 @@ final class MarkdownDocument: NSDocument {
         return Data(text.utf8)
     }
 
-    override class func canConcurrentlyReadDocuments(ofType typeName: String) -> Bool { false }
+    /// PDF extraction (and OCR) can take long, so PDFs are read off the main thread: `read(from:ofType:)`
+    /// only sets the document's own properties and touches no UI there.
+    override class func canConcurrentlyReadDocuments(ofType typeName: String) -> Bool {
+        typeName == DocumentTypes.pdf
+    }
 
     override func writableTypes(for saveOperation: NSDocument.SaveOperationType) -> [String] {
         // Note: must not read `fileType` here (NSDocument derives a default fileType from this method)

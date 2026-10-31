@@ -862,7 +862,92 @@ final class SelfTest {
         doc.updateChangeCount(.changeCleared)
         doc.close()
 
+        await pdfRouting(pdfURL: pdfURL, in: dir)
         await latexReview(pdfURL: pdfURL, sentence: sentence, in: dir)
+    }
+
+    /// PDFs open (off the main thread) as untitled Markdown with their warnings; comparing leaves the
+    /// annotations out; preview links, editor drops and Batch Convert folders keep PDFs out as in 2.1,
+    /// while the Files sidebar lists PDFs and LaTeX sources.
+    private func pdfRouting(pdfURL: URL, in dir: URL) async {
+        check(MarkdownDocument.canConcurrentlyReadDocuments(ofType: DocumentTypes.pdf)
+              && !MarkdownDocument.canConcurrentlyReadDocuments(ofType: DocumentTypes.markdown),
+              "PDF: only PDFs are read off the main thread")
+        var ticks = 0
+        let timer = Timer(timeInterval: 0.01, repeats: true) { _ in ticks += 1 }
+        RunLoop.main.add(timer, forMode: .common)
+        let opened = try? await NSDocumentController.shared.openDocument(withContentsOf: pdfURL, display: true)
+        timer.invalidate()
+        if let doc = opened?.0 as? MarkdownDocument {
+            await wait(0.2)
+            let marks = Settings.shared.revisionMode == .markup
+            check(doc.fileURL == nil && doc.fileType == DocumentTypes.markdown && doc.isDocumentEdited
+                  && doc.text.contains("bugs") && doc.text.contains("{==bugs==}") == marks
+                  && doc.windowController?.editor.string == doc.text,
+                  "PDF: opens as an edited untitled Markdown document (\(ticks) timer ticks while reading)")
+            doc.updateChangeCount(.changeCleared)
+            doc.close()
+        } else {
+            check(false, "PDF: reviewed.pdf did not open")
+        }
+
+        let scanURL = dir.appendingPathComponent("scan.pdf")
+        if let scan = Self.scannedPDF(text: "Scanned sample text"), scan.write(to: scanURL),
+           let (scanned, _) = try? await NSDocumentController.shared.openDocument(withContentsOf: scanURL, display: true),
+           let doc = scanned as? MarkdownDocument {
+            let expected = LF("pdf.ocrPages", "Text recognised with OCR on %d pages.", 1)
+            check(doc.text.lowercased().contains("scanned sample") && doc.windowController?.displayedMessage == expected,
+                  "PDF: a scanned PDF is recognised and the OCR note is shown: \(doc.windowController?.displayedMessage ?? "-")")
+            doc.updateChangeCount(.changeCleared)
+            doc.close()
+        } else {
+            check(false, "PDF: scanned PDF did not open")
+        }
+
+        let compared = (try? await DiffWindowController.text(ofFileAt: pdfURL)) ?? ""
+        check(compared.contains("bugs") && !compared.contains("{==") && !compared.contains("{--") && !compared.contains("{>>"),
+              "Compare: PDF annotations are not part of the compared text")
+
+        let folder = dir.appendingPathComponent("routing", isDirectory: true)
+        try? FileManager.default.removeItem(at: folder)
+        try? FileManager.default.createDirectory(at: folder.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        let names = ["a.md", "b.pdf", "c.tex", "d.ltx", "e.png", "sub/f.docx"]
+        for name in names { try? Data("x".utf8).write(to: folder.appendingPathComponent(name)) }
+        let url = { (name: String) in folder.appendingPathComponent(name) }
+        check(!PreviewView.opensLinkInApp(url("b.pdf")) && PreviewView.opensLinkInApp(url("a.md"))
+              && PreviewView.opensLinkInApp(url("sub/f.docx")),
+              "Preview: a link to a PDF opens in the PDF viewer, Markdown and Word links open in the app")
+        check(EditorTextView.droppedDocuments([url("b.pdf"), url("a.md")]) == [url("a.md")],
+              "Editor: a dropped PDF is not imported")
+        let fromFolder = BatchConvertWindowController.collect([folder], adding: []).map(\.lastPathComponent).sorted()
+        let chosen = BatchConvertWindowController.collect([url("b.pdf"), url("e.png")], adding: []).map(\.lastPathComponent)
+        check(fromFolder == ["a.md", "f.docx"] && chosen == ["b.pdf"],
+              "Batch Convert: folders skip PDFs, a chosen PDF is accepted (\(fromFolder), \(chosen))")
+        let listed = FileNode(url: folder, isDirectory: true).children.map(\.url.lastPathComponent)
+        check(listed == ["sub", "a.md", "b.pdf", "c.tex", "d.ltx"], "Files sidebar lists PDFs and LaTeX sources: \(listed)")
+    }
+
+    /// A one-page PDF without a text layer: `text` drawn into a bitmap that fills the page.
+    static func scannedPDF(text: String) -> PDFDocument? {
+        let size = CGSize(width: 1224, height: 1584)
+        guard let bitmap = CGContext(data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0,
+                                     space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+        bitmap.setFillColor(.white)
+        bitmap.fill(CGRect(origin: .zero, size: size))
+        let font = CTFontCreateWithName("Helvetica" as CFString, 48, nil)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor.black]))
+        bitmap.textPosition = CGPoint(x: 144, y: 1300)
+        CTLineDraw(line, bitmap)
+        guard let image = bitmap.makeImage() else { return nil }
+        let data = NSMutableData()
+        var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let consumer = CGDataConsumer(data: data as CFMutableData),
+              let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else { return nil }
+        context.beginPDFPage(nil)
+        context.draw(image, in: mediaBox)
+        context.endPDFPage()
+        context.closePDF()
+        return PDFDocument(data: data as Data)
     }
 
     /// On-device AI proposals: a spelling comment yields a replacement with the British spelling, and a run
@@ -1149,6 +1234,32 @@ final class SelfTest {
         formattedDoc.updateChangeCount(.changeCleared)
         formattedDoc.close()
         formatted.close()
+
+        // Paragraph-level changes: marks stay inside lines and block syntax stays outside them
+        let paragraphs = DiffWindowController(oldTitle: "P1", old: "# Old heading\n\nFirst paragraph.\n\nGone paragraph text.\n\nLast paragraph.",
+                                              newTitle: "P2", new: "## New heading\n\nFirst paragraph.\n\nA brand new paragraph here.\n\n- item one\n- item two\n\nLast paragraph.")
+        paragraphs.ignoreWhitespace = false; paragraphs.ignoreCase = false; paragraphs.ignoreFormatting = false
+        await paragraphs.recompute()
+        let paragraphDoc = await paragraphs.openAsReviewMarks()
+        let blocks = MDDocument(markdown: paragraphDoc.text).blocks
+        let headingLevel: Int? = { if case .heading(let level, _, _) = blocks.first { return level }; return nil }()
+        let hasList = blocks.contains { if case .list(let l) = $0 { return l.items.count == 2 }; return false }
+        let html = HTMLRenderer.render(markdown: paragraphDoc.text)
+        check(headingLevel == 2 && hasList && !html.contains("{++") && !html.contains("++}") && !html.contains("{--") && !html.contains("--}")
+              && html.contains("<ins") && html.contains("<del"),
+              "Diff: paragraph and heading changes give valid review marks: \(paragraphDoc.text.replacingOccurrences(of: "\n", with: "⏎"))")
+        paragraphDoc.updateChangeCount(.changeCleared)
+        paragraphDoc.close()
+        let paragraphWord = dir.appendingPathComponent("paragraphs.docx")
+        do {
+            try await paragraphs.exportWord(to: paragraphWord)
+            let xml = String(decoding: try ZipReader(data: Data(contentsOf: paragraphWord)).contents(of: "word/document.xml") ?? Data(), as: UTF8.self)
+            check(xml.contains("<w:ins ") && xml.contains("<w:del ") && !xml.contains("{++") && !xml.contains("{--"),
+                  "Diff: Word export of paragraph changes has tracked insertions and deletions")
+        } catch {
+            check(false, "Diff: Word export of paragraph changes: \(error.localizedDescription)")
+        }
+        paragraphs.close()
 
         // Screenshots with wrapped, inserted and deleted lines
         let oldSample = "# Results\n\nThe experiment was repeated three times with the same settings, and the values were averaged before the statistical analysis was performed on the whole data set.\n\nThis paragraph was removed.\n\nAll samples were stored at room temperature.\nThe end."

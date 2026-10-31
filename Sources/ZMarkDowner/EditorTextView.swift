@@ -528,11 +528,16 @@ final class EditorTextView: NSTextView {
         return super.performDragOperation(sender)
     }
 
+    /// Dropped files that open as documents; PDFs are not among them (handled like other files, as in 2.1).
+    static func droppedDocuments(_ urls: [URL]) -> [URL] {
+        urls.filter { DocumentImporter.supportedExtensions.contains($0.pathExtension.lowercased()) }
+    }
+
     /// Image files are inserted as images, other documents are opened; raw image data is saved next to the document.
     func handleFilesOrImages(from pb: NSPasteboard, at range: NSRange) -> Bool {
         if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
             let images = urls.filter { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .image) == true }
-            let documents = urls.filter { DocumentImporter.supportedExtensions.contains($0.pathExtension.lowercased()) }
+            let documents = Self.droppedDocuments(urls)
             if !images.isEmpty {
                 insertImageFiles(images, at: range)
                 return true
