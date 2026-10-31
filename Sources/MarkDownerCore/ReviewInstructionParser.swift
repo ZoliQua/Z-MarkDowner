@@ -11,6 +11,18 @@ public enum ReviewInstructionParser {
     /// `quoted` is the marked text and `sentence` its surrounding text. For a caret `sentence` is the
     /// text before the caret, whose last word becomes the insertion target.
     public static func suggestion(kind: AnnotationKind, quoted: String, comment: String, sentence: String) -> Suggestion? {
+        guard let parsed = parse(kind: kind, quoted: quoted, comment: comment, sentence: sentence) else { return nil }
+        switch parsed {
+        case .replace(_, let text), .insertAfter(_, let text), .insertBefore(_, let text):
+            // An ellipsis marks a partial rewrite ("… the rest stays"), not text that can be applied.
+            if text.contains("...") || text.contains("…") { return nil }
+        case .delete:
+            break
+        }
+        return parsed
+    }
+
+    private static func parse(kind: AnnotationKind, quoted: String, comment: String, sentence: String) -> Suggestion? {
         let quoted = collapse(quoted)
         let comment = collapse(comment)
         switch kind {
@@ -40,11 +52,12 @@ public enum ReviewInstructionParser {
             }
         }
         guard !quoted.isEmpty else { return nil }
+        let core = withoutEdgePunctuation(quoted)
         let replacements = [#"\b(?:change|replace)(?:\s+(?:it|this|that))?\s+(?:to|with|by|into)\s*:?\s*%Q"#,
                             #"\bshould\s+(?:be|read)\s*:?\s*%Q"#,
                             #"(?:→|->|=>)\s*%Q"#]
         for pattern in replacements {
-            if let text = match(pattern, in: comment)?.first { return .replace(target: quoted, with: text) }
+            if let text = match(pattern, in: comment)?.first { return .replace(target: core.text, with: core.trimming(text)) }
         }
         for pattern in [#"\b(?:add|insert)\s+after(?:\s+(?:this|it|that))?\s*:?\s*%Q"#, #"\b(?:add|insert)\s+%Q\s+after\b"#] {
             if let text = match(pattern, in: comment)?.first { return .insertAfter(target: quoted, text: spacedAfter(text)) }
@@ -57,8 +70,8 @@ public enum ReviewInstructionParser {
             return .delete(target: quoted)
         }
         let strings = quotedStrings(in: comment)
-        if strings.count == 1, let candidate = strings.first, candidate != quoted, isSimilar(candidate, quoted) {
-            return .replace(target: quoted, with: candidate)
+        if strings.count == 1, let candidate = strings.first.map(core.trimming), candidate != core.text, isSimilar(candidate, core.text) {
+            return .replace(target: core.text, with: candidate)
         }
         return nil
     }
@@ -99,6 +112,31 @@ public enum ReviewInstructionParser {
     }
 
     // MARK: Helpers
+
+    /// A quote without the punctuation at its ends ("visualization," → "visualization"), so a
+    /// replacement keeps that punctuation in the source.
+    private struct Core {
+        var text: String
+        var leading: String
+        var trailing: String
+
+        /// The replacement without the same punctuation, when the reviewer repeated it.
+        func trimming(_ replacement: String) -> String {
+            var result = replacement
+            if !trailing.isEmpty, result.hasSuffix(trailing), result.count > trailing.count { result.removeLast(trailing.count) }
+            if !leading.isEmpty, result.hasPrefix(leading), result.count > leading.count { result.removeFirst(leading.count) }
+            return result
+        }
+    }
+
+    private static func withoutEdgePunctuation(_ quoted: String) -> Core {
+        let isPunctuation = { (c: Character) in c.unicodeScalars.allSatisfy { CharacterSet.punctuationCharacters.contains($0) } }
+        let leading = String(quoted.prefix(while: isPunctuation))
+        guard leading.count < quoted.count else { return Core(text: quoted, leading: "", trailing: "") }
+        let trailing = String(quoted.reversed().prefix(while: isPunctuation).reversed())
+        let text = String(quoted.dropFirst(leading.count).dropLast(trailing.count))
+        return Core(text: text, leading: leading, trailing: trailing)
+    }
 
     private static func collapse(_ text: String) -> String {
         text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)

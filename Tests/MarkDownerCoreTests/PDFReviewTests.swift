@@ -163,6 +163,31 @@ final class PDFReviewTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(ReviewComment.self, from: Data(#"{"page":1}"#.utf8)))
     }
 
+    /// The quote of one highlight whose quad is `rect` on a one-line page.
+    private func quote(over rect: (PDFDocument) -> CGRect, line: String, lineNumbers: Bool = false) -> String? {
+        let doc = SyntheticPDF.make(pages: [[body(line)]], lineNumbers: lineNumbers)
+        doc.page(at: 0)!.addAnnotation(SyntheticPDF.markup(.highlight, over: [rect(doc)], contents: "x"))
+        return PDFReviewExtractor.comments(from: SyntheticPDF.reloaded(doc)).first?.quotedText
+    }
+
+    func testQuoteSnapsToWholeWords() {
+        let line = "Results show bugs in current tools for visualization of data."
+        // Overshoots by one character into the next word.
+        XCTAssertEqual(quote(over: { SyntheticPDF.bounds(of: "current t", in: $0) }, line: line), "current")
+        // Stops one or two characters short.
+        XCTAssertEqual(quote(over: { SyntheticPDF.bounds(of: "visualizatio", in: $0) }, line: line), "visualization")
+        XCTAssertEqual(quote(over: { SyntheticPDF.bounds(of: "visualizati", in: $0) }, line: line), "visualization")
+        // Starts one character late and overshoots by part of a character.
+        XCTAssertEqual(quote(over: { doc in
+            let r = SyntheticPDF.bounds(of: "tools", in: doc)
+            return CGRect(x: r.minX + 2, y: r.minY, width: r.width + 1, height: r.height)
+        }, line: line), "tools")
+        // A quad reaching over the lineno number after the word.
+        XCTAssertEqual(quote(over: { doc in
+            SyntheticPDF.bounds(of: "controls", in: doc).union(SyntheticPDF.bounds(of: "1", in: doc))
+        }, line: "interpretations of negative controls", lineNumbers: true), "controls")
+    }
+
     // MARK: Instructions
 
     func testInstructionPatterns() {
@@ -205,5 +230,14 @@ final class PDFReviewTests: XCTestCase {
         XCTAssertNil(parse("", "very", "", kind: .caret))
         XCTAssertNil(parse("", "delete", kind: .note))
         XCTAssertNil(parse("bugs", "", kind: .highlight))
+        // Punctuation attached to the quote stays outside the target.
+        XCTAssertEqual(parse("visualization,", #""visualisation""#), .replace(target: "visualization", with: "visualisation"))
+        XCTAssertEqual(parse("(colour)", "should be “color”"), .replace(target: "colour", with: "color"))
+        XCTAssertEqual(parse("colour,", "should be “color,”"), .replace(target: "colour", with: "color"))
+        // An ellipsis marks a partial rewrite, not an applicable edit.
+        XCTAssertNil(parse("the", #"I would change to: ".... a trailing ellipsis (three dots i.e. ... ), the.....""#))
+        XCTAssertNil(parse("tools", "add after: “and so on…”"))
+        XCTAssertEqual(parse("formatting regressions", #"I would change to: "formatting regressions that change project styling""#),
+                       .replace(target: "formatting regressions", with: "formatting regressions that change project styling"))
     }
 }

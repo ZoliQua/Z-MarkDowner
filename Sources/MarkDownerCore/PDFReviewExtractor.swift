@@ -253,7 +253,9 @@ public enum PDFReviewExtractor {
             let inset = min(0.5, rect.width / 4)
             let band = CGRect(x: rect.minX + inset, y: rect.midY - rect.height * 0.2,
                               width: rect.width - 2 * inset, height: rect.height * 0.4)
-            var text = clean(page.selection(for: band)?.string)
+            let snapped = wordRange(under: rect, on: page)
+            var text = snapped.map { clean((page.string as NSString?)?.substring(with: $0.range)) }
+                ?? clean(page.selection(for: band)?.string)
             guard let index = lineIndex(for: rect, in: lines) else {
                 if !text.isEmpty { pieces.append(Piece(text: text)) }
                 continue
@@ -263,7 +265,7 @@ public enum PDFReviewExtractor {
                 let stripped = PDFTextExtractor.stripLineNumbers(text)
                 if lineText.contains(stripped) { text = stripped }
             }
-            let left = textLeft(of: rect.minX + inset, in: lines[index], on: page)
+            let left = textLeft(of: snapped.map { $0.minX - 0.5 } ?? rect.minX + inset, in: lines[index], on: page)
             let expected = min(left.isEmpty ? 0 : left.count + 1, lineText.count)
             let starts = text.isEmpty ? [] : lineText.ranges(of: text).map { lineText.distance(from: lineText.startIndex, to: $0.lowerBound) }
             let start = starts.min { abs($0 - expected) < abs($1 - expected) } ?? expected
@@ -275,6 +277,91 @@ public enum PDFReviewExtractor {
         let before = first.map { context(before: $0.start, inLine: $0.line!, of: lines) } ?? ""
         let after = last.map { context(after: $0.end, inLine: $0.line!, of: lines) } ?? ""
         return (text, before, after)
+    }
+
+    /// The page-string range of the whole words under one line's quad.
+    ///
+    /// A character is under the quad when the centre of its glyph is. Words are runs of glyphs without
+    /// spaces or gaps wider than a fifth of the line height. A word at either end counts when at least half
+    /// of its letters are under the quad, and is then taken whole, so quads that stop short of a word's
+    /// end or reach into the next word still quote whole words. A number standing more than a line height
+    /// apart at either end (a `lineno` number) is left out. `minX` is the left edge of the first glyph.
+    private static func wordRange(under rect: CGRect, on page: PDFPage) -> (range: NSRange, minX: CGFloat)? {
+        guard let string = page.string as NSString?, string.length > 0, rect.height > 0 else { return nil }
+        let em = rect.height
+        let search = CGRect(x: rect.minX - em, y: rect.midY - em * 0.2, width: rect.width + 2 * em, height: em * 0.4)
+        guard let selection = page.selection(for: search) else { return nil }
+        let ranges = (0..<selection.numberOfTextRanges(on: page)).map { selection.range(at: $0, on: page) }
+            .filter { $0.location != NSNotFound && $0.length > 0 }
+        guard var lower = ranges.map(\.location).min(), var upper = ranges.map(NSMaxRange).max() else { return nil }
+        upper = min(upper, string.length)
+
+        var boxes: [Int: CGRect] = [:]
+        func box(_ i: Int) -> CGRect? {
+            if let cached = boxes[i] { return cached.isEmpty ? nil : cached }
+            let bounds = page.selection(for: NSRange(location: i, length: 1))?.bounds(for: page) ?? .zero
+            boxes[i] = bounds
+            return bounds.isEmpty ? nil : bounds
+        }
+        func isSpace(_ i: Int) -> Bool {
+            UnicodeScalar(string.character(at: i)).map { CharacterSet.whitespacesAndNewlines.contains($0) } ?? true
+        }
+        func adjacent(_ a: Int, _ b: Int) -> Bool {
+            guard !isSpace(a), !isSpace(b), let x = box(a), let y = box(b) else { return false }
+            return y.minX - x.maxX <= em * 0.2 && x.minX - y.maxX <= em * 0.2 && abs(x.midY - y.midY) < em / 2
+        }
+        var steps = 0
+        while lower > 0, steps < 60, adjacent(lower - 1, lower) { lower -= 1; steps += 1 }
+        steps = 0
+        while upper < string.length, steps < 60, adjacent(upper - 1, upper) { upper += 1; steps += 1 }
+
+        var words: [ClosedRange<Int>] = []
+        var start: Int?
+        for i in lower..<upper {
+            if isSpace(i) || box(i) == nil {
+                if let s = start { words.append(s...(i - 1)) }
+                start = nil
+            } else if let s = start, !adjacent(i - 1, i) {
+                words.append(s...(i - 1))
+                start = i
+            } else if start == nil {
+                start = i
+            }
+        }
+        if let s = start { words.append(s...(upper - 1)) }
+
+        func isAlphanumeric(_ i: Int) -> Bool {
+            UnicodeScalar(string.character(at: i)).map { CharacterSet.alphanumerics.contains($0) } ?? false
+        }
+        func isUnder(_ i: Int) -> Bool {
+            guard let b = box(i) else { return false }
+            return rect.contains(CGPoint(x: b.midX, y: b.midY))
+        }
+        func share(_ word: ClosedRange<Int>) -> (under: Int, total: Int) {
+            let letters = word.filter(isAlphanumeric)
+            let counted = letters.isEmpty ? Array(word) : letters
+            return (counted.filter(isUnder).count, counted.count)
+        }
+        var selected = words.filter { let s = share($0); return s.under > 0 && s.under * 2 >= s.total }
+        if selected.isEmpty, let best = words.max(by: { share($0).under < share($1).under }), share(best).under > 0 {
+            selected = [best]
+        }
+        func isNumber(_ word: ClosedRange<Int>) -> Bool {
+            word.allSatisfy { (0x30...0x39).contains(string.character(at: $0)) }
+        }
+        func gap(_ a: ClosedRange<Int>, _ b: ClosedRange<Int>) -> CGFloat {
+            guard let x = box(a.upperBound), let y = box(b.lowerBound) else { return 0 }
+            return y.minX - x.maxX
+        }
+        while selected.count > 1, isNumber(selected[selected.count - 1]),
+              gap(selected[selected.count - 2], selected[selected.count - 1]) > em {
+            selected.removeLast()
+        }
+        while selected.count > 1, isNumber(selected[0]), gap(selected[0], selected[1]) > em {
+            selected.removeFirst()
+        }
+        guard let first = selected.first, let last = selected.last, let firstBox = box(first.lowerBound) else { return nil }
+        return (NSRange(location: first.lowerBound, length: last.upperBound - first.lowerBound + 1), firstBox.minX)
     }
 
     /// Context around a caret: the text before and after its horizontal centre on the line it marks.
