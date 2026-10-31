@@ -191,6 +191,8 @@
 "panel.chooseImage" = "Choose images to insert";
 "pdf.locked" = "The PDF is password-protected, so its text could not be read.";
 "pdf.noText" = "The PDF contains no extractable text.";
+"pdf.noTextOnPage" = "No text could be recognised on page %d.";
+"pdf.ocrPages" = "Text recognised with OCR on %d pages.";
 "placeholder.bold" = "bold text";
 "placeholder.caption" = "Caption";
 "placeholder.cell" = "Cell";

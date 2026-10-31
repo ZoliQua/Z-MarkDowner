@@ -30,6 +30,10 @@ public enum DocumentImporter {
 
     public static var revisionMode: RevisionMode = .markup
 
+    /// User-visible notes about the last import (for PDFs: OCR use, pages without text). Reset by every
+    /// `markdown(fromFileAt:)` call.
+    public static var lastImportWarnings: [String] = []
+
     public static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn"]
     public static let plainTextExtensions: Set<String> = ["txt", "text"]
     public static let richTextExtensions: Set<String> = ["rtf", "rtfd", "doc", "docx", "odt", "html", "htm", "pdf"]
@@ -39,6 +43,7 @@ public enum DocumentImporter {
     }
 
     public static func markdown(fromFileAt url: URL) throws -> String {
+        lastImportWarnings = []
         let ext = url.pathExtension.lowercased()
         if markdownExtensions.contains(ext) || plainTextExtensions.contains(ext) || ext.isEmpty {
             let data: Data
@@ -57,7 +62,10 @@ public enum DocumentImporter {
                                      userInfo: [NSLocalizedDescriptionKey: CoreStrings.pdfLocked])
                 throw ImportError.unreadable(url.lastPathComponent, underlying: reason)
             }
-            return PDFTextExtractor.extract(document).markdown
+            let extraction = PDFTextExtractor.extract(document)
+            lastImportWarnings = extraction.warnings
+            if !extraction.ocrPages.isEmpty { lastImportWarnings.append(CoreStrings.pdfOCRPages(extraction.ocrPages.count)) }
+            return extraction.markdown
         }
 
         if ext == "docx" {

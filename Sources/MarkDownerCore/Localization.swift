@@ -72,5 +72,7 @@ enum CoreStrings {
     static func corruptZip(_ what: String) -> String { LF("error.corruptZip", "Damaged ZIP package (%@).", what) }
     static func unsupportedZipMethod(_ m: Int) -> String { LF("error.zipMethod", "Unsupported compression method: %d.", m) }
     static let pdfLocked = L("pdf.locked", "The PDF is password-protected, so its text could not be read.")
+    static func pdfNoTextOnPage(_ page: Int) -> String { LF("pdf.noTextOnPage", "No text could be recognised on page %d.", page) }
+    static func pdfOCRPages(_ n: Int) -> String { LF("pdf.ocrPages", "Text recognised with OCR on %d pages.", n) }
     static let pdfNoText = L("pdf.noText", "The PDF contains no extractable text.")
 }

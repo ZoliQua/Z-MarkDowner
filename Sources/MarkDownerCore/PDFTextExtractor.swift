@@ -53,6 +53,8 @@ public enum PDFTextExtractor {
         var pages: [[PDFLine]] = []
         var pageBounds: [CGRect] = []
         var ocrPages: [Int] = []
+        var warnings: [String] = []
+        let languages = ocr ? PDFOCR.preferredLanguages : []
         for index in 0..<document.pageCount {
             guard let page = document.page(at: index) else {
                 pages.append([])
@@ -60,25 +62,23 @@ public enum PDFTextExtractor {
                 continue
             }
             var lines = readLines(of: page, index: index)
-            if ocr, lines.reduce(0, { $0 + $1.text.count }) < ocrCharacterThreshold,
-               let recognized = recognizedLines(of: page, index: index) {
-                lines = recognized
-                ocrPages.append(index)
+            if ocr, lines.reduce(0, { $0 + $1.text.count }) < ocrCharacterThreshold {
+                let recognized = PDFOCR.recognize(page, pageIndex: index, languages: languages)
+                if recognized.isEmpty {
+                    warnings.append(CoreStrings.pdfNoTextOnPage(index + 1))
+                } else {
+                    lines = recognized
+                    ocrPages.append(index)
+                }
             }
             pages.append(lines)
             pageBounds.append(page.bounds(for: .mediaBox))
         }
 
         let ordered = cleanLines(pages, pageBounds: pageBounds).flatMap(readingOrder)
-        var warnings: [String] = []
         if document.pageCount > 0 && ordered.isEmpty { warnings.append(CoreStrings.pdfNoText) }
         let markdown = frontMatter(of: document) + render(ordered)
         return PDFExtraction(markdown: markdown, lines: ordered, ocrPages: ocrPages, warnings: warnings)
-    }
-
-    /// Seam for text recognition of pages without a usable text layer; returns `nil` while OCR is unavailable.
-    private static func recognizedLines(of page: PDFPage, index: Int) -> [PDFLine]? {
-        nil
     }
 
     // MARK: Reading lines

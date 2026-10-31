@@ -65,4 +65,34 @@ enum SyntheticPDF {
         context.textPosition = CGPoint(x: x, y: y)
         CTLineDraw(line, context)
     }
+
+    /// A PDF whose pages hold only a bitmap of the given text (nil: a blank page), so they have no text layer.
+    static func makeScanned(pages: [String?], fontSize: CGFloat = 40) -> PDFDocument {
+        let data = NSMutableData()
+        var mediaBox = CGRect(origin: .zero, size: pageSize)
+        guard let consumer = CGDataConsumer(data: data as CFMutableData),
+              let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+            fatalError("Cannot create PDF context")
+        }
+        for text in pages {
+            context.beginPDFPage(nil)
+            if let image = bitmap(text, fontSize: fontSize) { context.draw(image, in: mediaBox) }
+            context.endPDFPage()
+        }
+        context.closePDF()
+        guard let document = PDFDocument(data: data as Data) else { fatalError("Cannot read scanned PDF") }
+        return document
+    }
+
+    private static func bitmap(_ text: String?, fontSize: CGFloat) -> CGImage? {
+        let scale: CGFloat = 2
+        let width = Int(pageSize.width * scale), height = Int(pageSize.height * scale)
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
+        context.setFillColor(gray: 1, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.scaleBy(x: scale, y: scale)
+        if let text { draw(text, size: fontSize, bold: false, x: 72, y: pageSize.height - 200, in: context) }
+        return context.makeImage()
+    }
 }

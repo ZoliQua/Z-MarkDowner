@@ -48,8 +48,18 @@ final class MarkdownDocument: NSDocument {
 
     override class var autosavesInPlace: Bool { true }
 
+    /// Notes from importing a PDF (OCR use, pages without text), shown once the window exists.
+    private var pendingImportWarnings: [String] = []
+
     override func makeWindowControllers() {
         addWindowController(DocumentWindowController(document: self))
+        showPendingImportWarnings()
+    }
+
+    private func showPendingImportWarnings() {
+        guard !pendingImportWarnings.isEmpty, let controller = windowController else { return }
+        controller.showMessage(pendingImportWarnings.joined(separator: " "))
+        pendingImportWarnings = []
     }
 
     override var displayName: String! {
@@ -66,6 +76,8 @@ final class MarkdownDocument: NSDocument {
 
     override func read(from url: URL, ofType typeName: String) throws {
         text = try DocumentImporter.markdown(fromFileAt: url)
+        pendingImportWarnings = DocumentImporter.lastImportWarnings
+        showPendingImportWarnings()
         isPlainText = typeName == DocumentTypes.plainText
         windowController?.documentTextDidChangeExternally()
     }

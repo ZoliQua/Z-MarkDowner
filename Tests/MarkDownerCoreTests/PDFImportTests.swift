@@ -189,4 +189,34 @@ final class PDFImportTests: XCTestCase {
         let markdown = try DocumentImporter.markdown(fromFileAt: url)
         XCTAssertTrue(markdown.contains("Imported from a PDF file."), markdown)
     }
+
+    func testScannedPageRecognized() {
+        let doc = SyntheticPDF.makeScanned(pages: ["Scanned sample text"])
+        let result = PDFTextExtractor.extract(doc)
+        XCTAssertTrue(result.markdown.lowercased().contains("scanned sample text"), result.markdown)
+        XCTAssertEqual(result.ocrPages, [0])
+    }
+
+    func testBlankScanGivesWarning() {
+        let doc = SyntheticPDF.makeScanned(pages: [nil])
+        let result = PDFTextExtractor.extract(doc)
+        XCTAssertTrue(result.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        XCTAssertFalse(result.warnings.isEmpty)
+    }
+
+    func testOCRDisabled() {
+        let doc = SyntheticPDF.makeScanned(pages: ["Scanned sample text"])
+        XCTAssertTrue(PDFTextExtractor.extract(doc, ocr: false).ocrPages.isEmpty)
+    }
+
+    func testImporterReportsOCRWarning() throws {
+        let doc = SyntheticPDF.makeScanned(pages: ["Scanned sample text"])
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathComponent("scan.pdf")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        XCTAssertTrue(doc.write(to: url))
+        _ = try DocumentImporter.markdown(fromFileAt: url)
+        XCTAssertEqual(DocumentImporter.lastImportWarnings, [CoreStrings.pdfOCRPages(1)], "\(DocumentImporter.lastImportWarnings)")
+    }
 }
