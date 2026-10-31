@@ -725,7 +725,8 @@ final class SelfTest {
             return
         }
         let mdURL = dir.appendingPathComponent("paper.md")
-        let source = "# Paper\n\n\(sentence)\n"
+        let filler = (1...40).map { "## Part \($0)\n\nFiller paragraph \($0) about other matters.\n\n" }.joined()
+        let source = "# Paper\n\n" + filler + "\(sentence)\n"
         try? source.write(to: mdURL, atomically: true, encoding: .utf8)
         guard let (opened, _) = try? await NSDocumentController.shared.openDocument(withContentsOf: mdURL, display: true),
               let doc = opened as? MarkdownDocument, let wc = doc.windowController, let window = wc.window,
@@ -772,9 +773,26 @@ final class SelfTest {
         check(doc.isDocumentEdited, "Review: applying marks the document edited")
         doc.undoManager?.undo()
         check(editor.string == source, "Review: applying is undoable")
+        let stored = { ReviewSession.load(for: mdURL)?.comments.first { $0.id == replace.id }?.status }
+        check(review.comment(replace.id)?.status == .open && stored() == .open && wc.sidebar.reviewView.displayedCount == 3,
+              "Review: undo reopens the comment (sidecar: \(stored().map { "\($0)" } ?? "-"))")
+        doc.undoManager?.redo()
+        check(editor.string.contains("Results show regressions in current") && review.comment(replace.id)?.status == .applied && stored() == .applied,
+              "Review: redo applies it again")
+        doc.undoManager?.undo()
+        check(editor.string == source && review.comment(replace.id)?.status == .open, "Review: undone again")
+
+        // Selecting a comment scrolls the preview to its passage
+        wc.setMode(.split)
+        _ = await js(window, "window.scrollTo(0, 0)")
+        await wait(0.5)
+        review.select(replace.id)
+        let scrolled = await waitFor(4) { (await js(window, "window.scrollY") as? Double ?? 0) > 300 }
+        check(scrolled && (editor.string as NSString).substring(with: editor.selectedRange()) == "bugs",
+              "Review: selecting a comment selects it in the editor and scrolls the preview")
 
         // Text typed before the passage: the anchors are recomputed before the edit
-        editor.replace(NSRange(location: ("# Paper\n\n" as NSString).length, length: 0), with: "In short: ")
+        editor.replace(NSRange(location: (editor.string as NSString).range(of: "Results show").location, length: 0), with: "In short: ")
         do {
             try review.apply(delete.id)
             check(editor.string.contains("In short: Results show bugs in tools for"), "Review: apply after an edit re-anchors first: \(editor.string)")
@@ -801,7 +819,7 @@ final class SelfTest {
               "Review: reloading the sidecar restores statuses and replies")
         check(review.hasReview(from: pdfURL), "Review: a second import of the same PDF is recognised")
         try? review.importPDF(pdfURL, continueExisting: true)
-        check(review.comment(note.id)?.status == .done && review.comment(replace.id)?.status == .applied,
+        check(review.comment(note.id)?.status == .done && review.comment(delete.id)?.status == .applied,
               "Review: continuing the review keeps the progress")
 
         // Response letter

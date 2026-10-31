@@ -592,6 +592,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         if mode != .editor { preview.scroll(toLine: Double(index)) }
     }
 
+    /// Scrolls the preview (when shown) to the source line holding `index`.
+    func scrollPreview(toCharacter index: Int) {
+        guard mode != .editor else { return }
+        syncSource = (1, ProcessInfo.processInfo.systemUptime)
+        preview.scroll(toLine: Double(lineNumber(at: index)))
+    }
+
     // MARK: - View modes
 
     func setMode(_ newMode: ViewMode, remember: Bool = true) {

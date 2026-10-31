@@ -213,6 +213,7 @@ final class ReviewController {
         editor.setSelectedRange(range)
         editor.scrollRangeToVisible(range)
         editor.showFindIndicator(for: range)
+        windowController?.scrollPreview(toCharacter: range.location)
     }
 
     /// Applies the comment's suggestion to its source file as one undoable edit and marks it applied.
@@ -244,11 +245,26 @@ final class ReviewController {
             anchors[other] = NSRange(location: anchor.location + result.delta, length: anchor.length)
         }
         anchors[id] = result.range
+        registerStatusUndo(id, on: editor.undoManager)
         self.session?.comments[index].status = .applied
         if save {
             saveSidecar()
             onChange?()
         }
+    }
+
+    /// Registers the comment's current status on `undoManager`, in the undo group of the edit made in the
+    /// same event, so undoing an applied suggestion also reopens the comment (and redo applies it again).
+    private func registerStatusUndo(_ id: String, on undoManager: UndoManager?) {
+        guard let undoManager, let status = comment(id)?.status else { return }
+        undoManager.registerUndo(withTarget: self) { [weak self] _ in
+            self?.restoreStatus(id, status, undoManager: undoManager)
+        }
+    }
+
+    private func restoreStatus(_ id: String, _ status: ReviewStatus, undoManager: UndoManager) {
+        registerStatusUndo(id, on: undoManager)
+        setStatus(id, status)
     }
 
     /// The part of `old` that differs from `new` (common prefix and suffix removed).

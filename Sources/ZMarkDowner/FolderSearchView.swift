@@ -346,6 +346,7 @@ extension DocumentWindowController {
         editor.setSelectedRange(clipped)
         editor.scrollRangeToVisible(clipped)
         editor.showFindIndicator(for: clipped)
+        scrollPreview(toCharacter: clipped.location)
     }
 
     func openSearchResult(_ url: URL, _ range: NSRange) {

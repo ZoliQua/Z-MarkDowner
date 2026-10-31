@@ -45,10 +45,13 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSO
         addSubview(background)
 
         tabs.segmentCount = 4
-        tabs.setLabel(L("sidebar.outline", "Outline"), forSegment: 0)
-        tabs.setLabel(L("sidebar.files", "Files"), forSegment: 1)
-        tabs.setLabel(L("sidebar.search", "Search"), forSegment: 2)
-        tabs.setLabel(L("sidebar.comments", "Comments"), forSegment: Self.commentsTab)
+        let segments = [(L("sidebar.outline", "Outline"), "list.bullet.indent"), (L("sidebar.files", "Files"), "folder"),
+                        (L("sidebar.search", "Search"), "magnifyingglass"), (L("sidebar.comments", "Comments"), "text.bubble")]
+        for (index, (name, symbol)) in segments.enumerated() {
+            tabs.setImage(NSImage(systemSymbolName: symbol, accessibilityDescription: name), forSegment: index)
+            tabs.setLabel("", forSegment: index)
+            tabs.setToolTip(name, forSegment: index)
+        }
         searchView.folder = { [weak self] in self?.searchFolder }
         tabs.trackingMode = .selectOne
         tabs.segmentStyle = .automatic
