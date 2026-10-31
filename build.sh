@@ -206,7 +206,7 @@ install)
     ;;
 dmg|notarize)
     DMG="$BUILD_DIR/$APP_NAME-$VERSION.dmg"
-    echo "▸ Creating $DMG…"
+    echo "▸ Creating ${DMG}…"
     STAGE="$BUILD_DIR/dmg"
     rm -rf "$STAGE" "$DMG"
     mkdir -p "$STAGE"
