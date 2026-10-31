@@ -122,6 +122,36 @@ public enum Stylesheets {
     .math-display { text-align: center; overflow-x: auto; overflow-y: hidden; padding: .3em 0; }
     pre.mermaid { background: transparent; text-align: center; font-family: inherit; }
     .math:not(.katex-rendered) { color: var(--muted); }
+    figure { margin: 1.2em 0; text-align: center; }
+    figure img { display: block; margin: 0 auto; }
+    figcaption { font-size: .92em; color: var(--muted); margin: .5em auto 0; max-width: 90%; }
+    .caption-label { font-weight: 600; color: var(--fg); }
+    .table-figure figcaption { margin: 0 auto .5em; }
+    .table-figure table { margin-left: auto; margin-right: auto; text-align: left; }
+    .equation { display: flex; align-items: center; margin: 0 0 1em; }
+    .equation .math-display { flex: 1; margin: 0; }
+    .eq-number { flex: none; padding-left: 1em; }
+    nav.toc { margin: 0 0 2em; padding: .8em 1.2em; border: 1px solid var(--border); border-radius: 8px; }
+    .toc-title { font-weight: 650; font-size: 1.15em; margin: 0 0 .5em; }
+    nav.toc ul { list-style: none; padding: 0; margin: 0; }
+    nav.toc li { margin: .15em 0; }
+    nav.toc a { display: flex; color: var(--fg); }
+    nav.toc .toc-text { flex: 0 1 auto; }
+    nav.toc .toc-page { flex: 1 0 auto; text-align: right; color: var(--muted); }
+    nav.toc .toc-page:not(:empty)::before { content: ""; }
+    .toc-level-1 { font-weight: 600; } .toc-level-2 { padding-left: 1.2em; } .toc-level-3 { padding-left: 2.4em; }
+    .toc-level-4 { padding-left: 3.6em; } .toc-level-5, .toc-level-6 { padding-left: 4.8em; }
+    .references { margin-top: .5em; }
+    .csl-entry { margin: 0 0 .6em; }
+    .csl-entry.hanging { padding-left: 2em; text-indent: -2em; }
+    .csl-entry.numbered { display: flex; gap: .5em; }
+    .csl-label { flex: none; min-width: 1.8em; }
+    ins.critic { background: rgba(46, 160, 67, .18); text-decoration: none; border-bottom: 1px solid rgba(46, 160, 67, .7); }
+    del.critic { background: rgba(248, 81, 73, .15); color: inherit; }
+    mark.critic, mark { background: var(--mark); color: inherit; }
+    .critic-comment { font-size: .8em; background: rgba(9, 105, 218, .1); border: 1px solid rgba(9, 105, 218, .35);
+      border-radius: 4px; padding: 0 .35em; margin: 0 .2em; color: var(--muted); }
+    .critic-comment::before { content: "💬 "; }
     """
 
     private static let export = """
@@ -130,5 +160,8 @@ public enum Stylesheets {
     pre { white-space: pre-wrap; word-wrap: break-word; overflow: visible; }
     table { display: table; }
     .math-display { overflow: visible; }
+    nav.toc { border: none; padding: 0; }
+    nav.toc .toc-text { flex: 0 1 auto; }
+    nav.toc .toc-page::before { content: none; }
     """
 }

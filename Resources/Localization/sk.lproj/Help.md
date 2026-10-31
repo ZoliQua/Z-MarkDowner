@@ -72,6 +72,40 @@ graph LR
 
 Vložte snímku obrazovky (⌘V) alebo do editora presuňte obrázok: uloží sa do priečinka `images` vedľa dokumentu.
 
+## Citácie a literatúra
+
+Vo front matter uveďte súbor BibTeX (`.bib`) alebo CSL-JSON (alebo nastavte predvolený v Nastavenia ▸ Písanie) a citujte pomocou `[@key]`:
+
+```markdown
+---
+bibliography: references.bib
+csl: vancouver        # alebo apa
+---
+
+As shown earlier [@kovacs2020, p. 5; @who2019], … @kovacs2020 found …
+```
+
+Zoznam literatúry sa pridá na koniec (alebo tam, kde umiestnite `::: {#refs}` … `:::`). **Formát ▸ Citácie a odkazy ▸ Vložiť citáciu…** (⌃⌘C) prehľadáva zoznam literatúry a pridáva nové zdroje podľa **DOI alebo PubMed ID**. Pri písaní `@` sa ponúknu kľúče.
+
+## Číslované obrázky, tabuľky a krížové odkazy
+
+| Formát | Výstup |
+|--------|--------|
+| PDF    | obsah s číslami strán |
+| Word   | skutočný obsah Wordu, popisy |
+
+Table: Exporty {#tbl:exports}
+
+@tbl:exports uvádza výstupné formáty. Obrázky označte pomocou `![Caption](image.png){#fig:name}`, rovnice pomocou `$$ … $$ {#eq:name}`, nadpisy pomocou `# Title {#sec:name}` a odkazujte na ne pomocou `@fig:name`, `@eq:name`, `@sec:name`. `[TOC]` (alebo `toc: true` vo front matter) vloží obsah; `numbersections: true` očísluje nadpisy.
+
+## Revízia: zmeny a komentáre
+
+Sledované zmeny a komentáre z dokumentov Wordu sa importujú ako revízne značky – a pri exporte sa do Wordu vrátia ako sledované zmeny a komentáre: {++vložené++}, {--vymazané--}, {~~staré~>nové~~}, {==zvýraznené==}{>>Komentár<<}. Prijať alebo odmietnuť ich môžete v ponuke **Upraviť ▸ Revízia**.
+
+## Živé formátovanie a nástroje na písanie
+
+**Zobraziť ▸ Živé formátovanie** (⌥⌘L) skryje značky Markdownu okrem riadka, ktorý práve upravujete. Kliknutím na počet slov v stavovej lište zobrazíte štatistiku, čas čítania a ciele písania. Karta **Hľadanie** v bočnom paneli vyhľadáva a nahrádza vo všetkých súboroch Markdown a textových súboroch priečinka (⌥⇧⌘F).
+
 ---
 
 **Export:** Súbor ▸ Exportovať ▸ PDF (⇧⌘E), Word (⇧⌘D), HTML alebo EPUB.

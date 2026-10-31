@@ -72,6 +72,40 @@ graph LR
 
 Collez une capture d’écran (⌘V) ou faites glisser une image dans l’éditeur : elle est enregistrée dans un dossier `images` à côté du document.
 
+## Citations et références
+
+Indiquez un fichier BibTeX (`.bib`) ou CSL-JSON dans le front matter (ou définissez-en un par défaut dans Réglages ▸ Écriture), puis citez avec `[@key]` :
+
+```markdown
+---
+bibliography: references.bib
+csl: vancouver        # ou apa
+---
+
+As shown earlier [@kovacs2020, p. 5; @who2019], … @kovacs2020 found …
+```
+
+La bibliographie est ajoutée à la fin (ou à l’endroit où vous placez `::: {#refs}` … `:::`). **Format ▸ Citations et références ▸ Insérer une citation…** (⌃⌘C) recherche dans la bibliographie et ajoute de nouvelles références par **DOI ou identifiant PubMed**. La saisie de `@` propose les clés.
+
+## Figures, tableaux numérotés et renvois
+
+| Format | Résultat |
+|--------|----------|
+| PDF    | table des matières avec numéros de page |
+| Word   | véritable table des matières Word, légendes |
+
+Table: Exportations {#tbl:exports}
+
+@tbl:exports liste les formats de sortie. Étiquetez les figures avec `![Caption](image.png){#fig:name}`, les équations avec `$$ … $$ {#eq:name}`, les titres avec `# Title {#sec:name}`, et faites-y référence avec `@fig:name`, `@eq:name`, `@sec:name`. `[TOC]` (ou `toc: true` dans le front matter) insère une table des matières ; `numbersections: true` numérote les titres.
+
+## Révision : modifications et commentaires
+
+Les modifications suivies et les commentaires des documents Word sont importés comme marques de révision – et réexportés vers Word comme modifications suivies et commentaires : {++inséré++}, {--supprimé--}, {~~ancien~>nouveau~~}, {==surligné==}{>>Un commentaire<<}. Utilisez **Édition ▸ Révision** pour les accepter ou les refuser.
+
+## Mise en forme en direct et outils d’écriture
+
+**Présentation ▸ Mise en forme en direct** (⌥⌘L) masque le balisage Markdown, sauf sur la ligne en cours de modification. Cliquez sur le nombre de mots dans la barre d’état pour afficher les statistiques, le temps de lecture et les objectifs d’écriture. L’onglet **Recherche** de la barre latérale recherche et remplace dans tous les fichiers Markdown et texte d’un dossier (⌥⇧⌘F).
+
 ---
 
 **Exporter :** Fichier ▸ Exporter ▸ PDF (⇧⌘E), Word (⇧⌘D), HTML ou EPUB.

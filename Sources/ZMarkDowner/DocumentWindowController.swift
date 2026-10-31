@@ -19,7 +19,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
     private let statusLabel = NSTextField(labelWithString: "")
     private let positionLabel = NSTextField(labelWithString: "")
     private let messageLabel = NSTextField(labelWithString: "")
+    private let warningLabel = NSTextField(labelWithString: "")
+    private let goalBar = NSProgressIndicator()
     private var modeControl: NSSegmentedControl?
+    private(set) var statsPopover: NSPopover?
+    /// Statistics of the whole document (updated shortly after each edit).
+    private(set) var statistics = TextStatistics()
+    private var lastWordCount: Int?
+    /// Result of the last citation / cross-reference processing (preview).
+    private(set) var lastProcessing: ProcessingResult?
 
     private let highlighter = MarkdownHighlighter()
     private var previewWork: DispatchWorkItem?
@@ -60,6 +68,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
 
         observers.append(NotificationCenter.default.addObserver(forName: Settings.didChange, object: nil, queue: .main) { [weak self] _ in
             self?.applySettings()
+        })
+        observers.append(NotificationCenter.default.addObserver(forName: WritingGoals.dailyGoalReached, object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.window?.isKeyWindow == true else { return }
+            self.showMessage(L("stats.dailyGoalReached", "🎉 Daily writing goal reached!"))
+            self.updateGoalDisplay()
         })
         editorScroll.contentView.postsBoundsChangedNotifications = true
         observers.append(NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification,
@@ -107,6 +120,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         editor.backgroundColor = .textBackgroundColor
         editor.insertionPointColor = .controlAccentColor
         editor.delegate = self
+        editor.citationCandidates = { [weak self] in self?.citationCandidates() ?? [] }
         editor.setAccessibilityLabel(L("editor.accessibility", "Markdown editor"))
 
         editorScroll.documentView = editor
@@ -131,6 +145,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         mainSplit.translatesAutoresizingMaskIntoConstraints = false
 
         sidebar.onSelectHeading = { [weak self] line in self?.reveal(line: line) }
+        sidebar.searchView.onOpenMatch = { [weak self] url, range in self?.openSearchResult(url, range) }
         preview.onScroll = { [weak self] line in self?.previewDidScroll(line) }
 
         // Status bar
@@ -141,7 +156,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         let separator = NSBox()
         separator.boxType = .separator
         separator.translatesAutoresizingMaskIntoConstraints = false
-        for label in [statusLabel, positionLabel, messageLabel] {
+        for label in [statusLabel, positionLabel, messageLabel, warningLabel] {
             label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
             label.textColor = .secondaryLabelColor
             label.translatesAutoresizingMaskIntoConstraints = false
@@ -150,6 +165,18 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         }
         messageLabel.alignment = .right
         messageLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        warningLabel.textColor = .systemOrange
+        warningLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        statusLabel.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(showStatistics(_:))))
+        statusLabel.toolTip = L("stats.tooltip", "Click for document statistics and writing goals")
+        goalBar.style = .bar
+        goalBar.controlSize = .small
+        goalBar.isIndeterminate = false
+        goalBar.minValue = 0
+        goalBar.maxValue = 1
+        goalBar.isHidden = true
+        goalBar.translatesAutoresizingMaskIntoConstraints = false
+        statusBar.addSubview(goalBar)
         statusBar.addSubview(separator)
 
         content.addSubview(mainSplit)
@@ -168,20 +195,31 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
             separator.trailingAnchor.constraint(equalTo: statusBar.trailingAnchor),
             statusLabel.leadingAnchor.constraint(equalTo: statusBar.leadingAnchor, constant: 12),
             statusLabel.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
-            positionLabel.leadingAnchor.constraint(equalTo: statusLabel.trailingAnchor, constant: 16),
+            goalBar.leadingAnchor.constraint(equalTo: statusLabel.trailingAnchor, constant: 8),
+            goalBar.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
+            goalBar.widthAnchor.constraint(equalToConstant: 70),
+            positionLabel.leadingAnchor.constraint(equalTo: goalBar.trailingAnchor, constant: 12),
             positionLabel.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
-            messageLabel.leadingAnchor.constraint(greaterThanOrEqualTo: positionLabel.trailingAnchor, constant: 12),
+            warningLabel.leadingAnchor.constraint(equalTo: positionLabel.trailingAnchor, constant: 16),
+            warningLabel.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
+            messageLabel.leadingAnchor.constraint(greaterThanOrEqualTo: warningLabel.trailingAnchor, constant: 12),
             messageLabel.trailingAnchor.constraint(equalTo: statusBar.trailingAnchor, constant: -12),
             messageLabel.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
         ])
     }
 
     private var appliedPreviewKey = ""
+    private var appliedProcessingKey = ""
+    private var appliedFontKey = ""
 
     private func applySettings() {
         let settings = Settings.shared
-        if highlighter.baseFont != settings.editorFont() || highlighter.fontSize != settings.editorFontSize {
+        let fontKey = "\(settings.editorFontName)|\(settings.editorFontSize)|\(settings.liveFormatting)"
+        if fontKey != appliedFontKey {
+            appliedFontKey = fontKey
+            highlighter.liveFormatting = settings.liveFormatting
             highlighter.updateFonts()
+            editor.liveFormatting = settings.liveFormatting
             rehighlight()
         }
         editor.readableWidth = settings.readableWidth
@@ -195,6 +233,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
             appliedPreviewKey = previewKey
             preview.reloadShell()
         }
+        let processingKey = "\(settings.citationStyle.rawValue)|\(settings.defaultBibliographyPath)|\(settings.numberSections)"
+        if processingKey != appliedProcessingKey {
+            let first = appliedProcessingKey.isEmpty
+            appliedProcessingKey = processingKey
+            if !first { schedulePreview() }
+        }
+        updateGoalDisplay()
     }
 
     // MARK: - Document text
@@ -204,7 +249,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         editor.string = text
         preview.baseDirectory = markdownDocument?.baseDirectory
         rehighlight()
-        preview.update(markdown: text)
+        lastWordCount = nil
         documentStructureChanged()
         updateStatus()
         editor.setSelectedRange(NSRange(location: 0, length: 0))
@@ -247,7 +292,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
                 highlighter.highlight(storage)
             }
             editor.typingAttributes = highlighter.baseAttributes
-            if editor.focusMode { editor.updateFocusDimming() }
+            if editor.focusMode || editor.liveFormatting { editor.updateFocusDimming() }
         }
         pendingEdit = nil
         refreshLineStarts()
@@ -275,15 +320,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         guard let storage = editor.textStorage else { return }
         highlighter.highlight(storage)
         editor.typingAttributes = highlighter.baseAttributes
-        if editor.focusMode { editor.updateFocusDimming() }
+        if editor.focusMode || editor.liveFormatting { editor.updateFocusDimming() }
     }
 
     private func schedulePreview() {
         previewWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            if self.mode != .editor { self.preview.update(markdown: self.editor.string) }
-            self.documentStructureChanged()
+            self?.documentStructureChanged()
         }
         previewWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
@@ -302,12 +345,48 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         lineStarts = starts
     }
 
-    /// Updates the outline and the line index used for scroll synchronisation.
+    var processingOptions: ProcessingOptions {
+        var options = Settings.shared.processingOptions
+        options.baseURL = markdownDocument?.baseDirectory
+        return options
+    }
+
+    /// Parses the text once and updates the outline, statistics and (when visible) the preview.
     private func documentStructureChanged() {
         refreshLineStarts()
         let doc = MDDocument(markdown: editor.string)
         sidebar.setHeadings(doc.outline.map { SidebarView.Heading(level: $0.level, text: $0.text, line: $0.line) })
         sidebar.highlightHeading(forLine: lineNumber(at: editor.selectedRange().location))
+        if mode != .editor {
+            preview.baseDirectory = markdownDocument?.baseDirectory
+            let result = DocumentProcessor.process(doc, options: processingOptions)
+            lastProcessing = result
+            preview.update(document: result.document)
+            updateWarnings(result)
+        }
+        statistics = TextStatistics(document: doc)
+        if let last = lastWordCount, statistics.words > last {
+            WritingGoals.shared.record(statistics.words - last)
+        }
+        lastWordCount = statistics.words
+        updateStatus()
+        updateGoalDisplay()
+        statsController?.refresh()
+    }
+
+    /// Unresolved citations and cross-references (only meaningful when a bibliography is in use).
+    private func updateWarnings(_ result: ProcessingResult) {
+        let relevant = result.unresolved.filter { key in
+            !result.entries.isEmpty || ["fig:", "tbl:", "eq:", "sec:"].contains { key.hasPrefix($0) }
+        }
+        var parts: [String] = []
+        if !relevant.isEmpty {
+            let unique = Array(NSOrderedSet(array: relevant)) as? [String] ?? relevant
+            parts.append(LF("warning.unresolved", "⚠︎ Unresolved: %@", unique.prefix(4).joined(separator: ", ") + (unique.count > 4 ? "…" : "")))
+        }
+        if let problem = result.warnings.first { parts.append("⚠︎ " + problem) }
+        warningLabel.stringValue = parts.joined(separator: "  ")
+        warningLabel.toolTip = (relevant + result.warnings).joined(separator: "\n")
     }
 
     private func lineNumber(at index: Int) -> Int {
@@ -320,14 +399,65 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
     }
 
     private func updateStatus() {
-        let text = editor.string
-        var words = 0
-        text.enumerateSubstrings(in: text.startIndex..., options: [.byWords, .substringNotRequired]) { _, _, _, _ in
-            words += 1
+        let minutes = max(1, Int(statistics.readingMinutes.rounded()))
+        var text = LF("status.words", "%d words · %d characters", statistics.words, statistics.characters)
+        if statistics.words > 0 { text += " · " + LF("status.readingTime", "%d min read", minutes) }
+        if let goal = documentGoal, goal > 0 {
+            text = LF("status.goal", "%d / %d words", statistics.words, goal) + " · " + LF("status.readingTime", "%d min read", minutes)
         }
-        let lines = text.isEmpty ? 0 : lineStarts.count
-        statusLabel.stringValue = LF("status.counts", "%d words · %d characters · %d lines", words, text.count, lines)
+        statusLabel.stringValue = text
         updatePosition()
+    }
+
+    // MARK: - Statistics and goals
+
+    /// Word goal of this document: front matter `goal:` / `word-goal:`, or one set in the statistics panel.
+    var documentGoal: Int? {
+        get {
+            let fm = MarkdownParser.frontMatter(of: editor.string)
+            if let value = fm["goal"] ?? fm["word-goal"] ?? fm["wordgoal"], let n = Int(value.filter(\.isNumber)) { return n }
+            return markdownDocument?.fileURL.flatMap { WritingGoals.shared.goal(for: $0) }
+        }
+        set {
+            if let url = markdownDocument?.fileURL { WritingGoals.shared.setGoal(newValue, for: url) }
+            updateStatus()
+            updateGoalDisplay()
+        }
+    }
+
+    private func updateGoalDisplay() {
+        guard editor != nil else { return }
+        if let goal = documentGoal, goal > 0 {
+            goalBar.isHidden = false
+            goalBar.doubleValue = min(1, Double(statistics.words) / Double(goal))
+            goalBar.toolTip = LF("stats.goalProgress", "%d%% of the goal", Int(goalBar.doubleValue * 100))
+        } else if Settings.shared.dailyWordGoal > 0 {
+            goalBar.isHidden = false
+            goalBar.doubleValue = min(1, Double(WritingGoals.shared.wordsToday) / Double(Settings.shared.dailyWordGoal))
+            goalBar.toolTip = LF("stats.dailyProgress", "Today: %d of %d words", WritingGoals.shared.wordsToday, Settings.shared.dailyWordGoal)
+        } else {
+            goalBar.isHidden = true
+        }
+    }
+
+    private weak var statsController: StatisticsViewController?
+
+    @objc func showStatistics(_ sender: Any?) {
+        if let popover = statsPopover, popover.isShown { popover.close(); return }
+        let controller = StatisticsViewController(windowController: self)
+        let popover = NSPopover()
+        popover.contentViewController = controller
+        popover.behavior = .transient
+        statsPopover = popover
+        statsController = controller
+        popover.show(relativeTo: statusLabel.bounds, of: statusLabel, preferredEdge: .maxY)
+    }
+
+    /// Statistics of the current selection (nil when nothing is selected).
+    var selectionStatistics: TextStatistics? {
+        let sel = editor.selectedRange()
+        guard sel.length > 0 else { return nil }
+        return TextStatistics(markdown: (editor.string as NSString).substring(with: sel))
     }
 
     private func updatePosition() {
@@ -423,9 +553,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
             contentSplit.setPosition(contentSplit.bounds.width / 2, ofDividerAt: 0)
         }
         if newMode != .editor {
-            preview.baseDirectory = markdownDocument?.baseDirectory
-            preview.update(markdown: editor.string)
+            documentStructureChanged()
             if newMode == .split { preview.scroll(toLine: editorTopLine()) }
+        } else {
+            warningLabel.stringValue = ""
         }
         modeControl?.selectedSegment = newMode.rawValue
         window?.makeFirstResponder(newMode == .preview ? preview : editor)
@@ -456,6 +587,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
     @objc func toggleSyncScroll(_ sender: Any?) { Settings.shared.syncScroll.toggle() }
     @objc func toggleFocusMode(_ sender: Any?) { Settings.shared.focusMode.toggle() }
     @objc func toggleTypewriterMode(_ sender: Any?) { Settings.shared.typewriterMode.toggle() }
+    @objc func toggleLiveFormatting(_ sender: Any?) { Settings.shared.liveFormatting.toggle() }
+    @objc func toggleNumberSections(_ sender: Any?) { Settings.shared.numberSections.toggle() }
 
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat,
                    ofSubviewAt dividerIndex: Int) -> CGFloat {
@@ -504,6 +637,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         #selector(EditorTextView.tableDeleteRow(_:)), #selector(EditorTextView.tableDeleteColumn(_:)),
         #selector(EditorTextView.tableAlignLeft(_:)), #selector(EditorTextView.tableAlignCenter(_:)),
         #selector(EditorTextView.tableAlignRight(_:)),
+        #selector(EditorTextView.insertComment(_:)), #selector(EditorTextView.markAsInsertion(_:)),
+        #selector(EditorTextView.markAsDeletion(_:)), #selector(EditorTextView.selectNextChange(_:)),
+        #selector(EditorTextView.selectPreviousChange(_:)), #selector(EditorTextView.acceptChange(_:)),
+        #selector(EditorTextView.rejectChange(_:)), #selector(EditorTextView.acceptAllChanges(_:)),
+        #selector(EditorTextView.rejectAllChanges(_:)), #selector(EditorTextView.removeAllComments(_:)),
+        #selector(EditorTextView.insertTableOfContents(_:)), #selector(EditorTextView.insertReferenceList(_:)),
+        #selector(EditorTextView.insertFigure(_:)), #selector(EditorTextView.insertTableCaption(_:)),
+        #selector(EditorTextView.insertCrossReference(_:)),
     ]
 
     /// Commands that only read the text keep working in preview mode.
@@ -540,6 +681,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         case #selector(toggleTypewriterMode(_:)):
             menuItem.state = Settings.shared.typewriterMode ? .on : .off
             return mode != .preview
+        case #selector(toggleLiveFormatting(_:)):
+            menuItem.state = Settings.shared.liveFormatting ? .on : .off
+            return mode != .preview
+        case #selector(toggleNumberSections(_:)):
+            menuItem.state = Settings.shared.numberSections ? .on : .off
         default: break
         }
         return true
@@ -578,9 +724,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
     }
 
     func writeDOCX(to url: URL) throws {
-        let base = markdownDocument?.baseDirectory
-        var writer = DocxWriter(title: exportBaseName) { LocalImage.load($0, base: base) }
-        try writer.makeDocx(markdown: editor.string).write(to: url, options: .atomic)
+        try DocxExporter.data(markdown: editor.string, options: exportOptions()).write(to: url, options: .atomic)
     }
 
     func writeHTML(to url: URL) throws {
@@ -669,10 +813,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         static let math = NSToolbarItem.Identifier("math")
         static let focus = NSToolbarItem.Identifier("focus")
         static let export = NSToolbarItem.Identifier("export")
+        static let citation = NSToolbarItem.Identifier("citation")
+        static let comment = NSToolbarItem.Identifier("comment")
+        static let live = NSToolbarItem.Identifier("live")
+        static let stats = NSToolbarItem.Identifier("stats")
+        static let search = NSToolbarItem.Identifier("search")
     }
 
     private func buildToolbar() {
-        let toolbar = NSToolbar(identifier: "ZMarkDownerToolbar2")
+        let toolbar = NSToolbar(identifier: "ZMarkDownerToolbar3")
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = true
@@ -683,12 +832,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [ItemID.sidebar, ItemID.heading, ItemID.bold, ItemID.italic, ItemID.strike, .space,
          ItemID.bullet, ItemID.numbered, ItemID.task, ItemID.quote, .space,
-         ItemID.code, ItemID.codeBlock, ItemID.link, ItemID.image, ItemID.table,
-         .flexibleSpace, ItemID.mode, ItemID.export]
+         ItemID.code, ItemID.codeBlock, ItemID.link, ItemID.image, ItemID.table, ItemID.citation,
+         .flexibleSpace, ItemID.live, ItemID.mode, ItemID.export]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar) + [ItemID.rule, ItemID.footnote, ItemID.math, ItemID.focus, .flexibleSpace, .space]
+        toolbarDefaultItemIdentifiers(toolbar) + [ItemID.rule, ItemID.footnote, ItemID.math, ItemID.focus, ItemID.comment,
+                                                  ItemID.stats, ItemID.search, .flexibleSpace, .space]
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier,
@@ -723,6 +873,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         case ItemID.footnote: return button(L("toolbar.footnote", "Footnote"), "text.append", #selector(EditorTextView.insertFootnote(_:)))
         case ItemID.math: return button(L("toolbar.math", "Formula"), "function", #selector(EditorTextView.insertMathBlock(_:)))
         case ItemID.focus: return button(L("toolbar.focus", "Focus Mode"), "scope", #selector(toggleFocusMode(_:)), target: self)
+        case ItemID.citation: return button(L("toolbar.citation", "Citation"), "books.vertical", #selector(insertCitation(_:)), target: self)
+        case ItemID.comment: return button(L("toolbar.comment", "Comment"), "text.bubble", #selector(EditorTextView.insertComment(_:)))
+        case ItemID.live: return button(L("menu.liveFormatting", "Live Formatting"), "textformat", #selector(toggleLiveFormatting(_:)), target: self)
+        case ItemID.stats: return button(L("menu.statistics", "Document Statistics"), "chart.bar.xaxis", #selector(showStatistics(_:)), target: self)
+        case ItemID.search: return button(L("menu.searchFolder", "Search in Folder…"), "magnifyingglass", #selector(showFolderSearch(_:)), target: self)
 
         case ItemID.heading:
             let item = NSMenuToolbarItem(itemIdentifier: id)

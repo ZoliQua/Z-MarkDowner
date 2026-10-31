@@ -3,6 +3,26 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-10-26
+
+### Added
+- Citations from BibTeX / CSL-JSON bibliographies (`[@key]`, `[see @key, p. 5; @other]`, `@key`, `[-@key]`) in Vancouver or APA 7 style, with an automatic reference list in the preview and all exports
+- *Insert Citation* sheet: search the bibliography, add references by DOI (doi.org) or PubMed ID (NCBI); `@` autocompletes citation keys and cross-reference labels
+- Numbered figures, tables and equations with captions and cross-references (`{#fig:…}`, `Table: … {#tbl:…}`, `$$ … $$ {#eq:…}`, `{#sec:…}`, `@fig:…`)
+- Table of contents (`[TOC]`, `toc: true`) and numbered headings (`numbersections: true`); page numbers in PDF, a real TOC field in Word
+- Clickable internal and external links in PDF exports
+- Word templates (.dotx / .docx, setting or front matter `reference-doc`): styles matched by name (works with localized Word), page setup, headers, footers, theme and list definitions
+- Word tracked changes and comments are imported as CriticMarkup and exported back to Word as tracked changes and comments; review commands (accept / reject change or all, next / previous change, comments)
+- Live formatting: WYSIWYG-like editing that hides Markdown markup outside the edited line, with drawn bullets, clickable checkboxes, rules and quote bars
+- Folder-wide search and replace in the sidebar (case, whole word, regular expressions)
+- Document statistics (words, characters, sentences, paragraphs, reading and speaking time, selection) and per-document / daily word goals with progress in the status bar
+- Settings ▸ Writing: citation style, default bibliography, heading numbering, Word template, handling of Word changes, daily goal
+
+### Fixed
+- Spaces stored in separate Word runs were lost when importing DOCX files
+- YAML front matter was not recognised by the editor's syntax highlighting (a key line could look like a heading)
+- Word export uses the document language (front matter `lang`) instead of always Hungarian, and the chosen paper size
+
 ## [2.0.0] - 2026-10-26
 
 ### Added
@@ -42,5 +62,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Export to PDF, Word (DOCX with real Word styles) and HTML
 - Unit tests and an in-app self test
 
+[2.1.0]: https://github.com/ZoliQua/Z-MarkDowner/releases/tag/v2.1.0
 [2.0.0]: https://github.com/ZoliQua/Z-MarkDowner/releases/tag/v2.0.0
 [1.0.0]: https://github.com/ZoliQua/Z-MarkDowner/releases/tag/v1.0.0

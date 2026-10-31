@@ -22,6 +22,17 @@ public enum MarkdownParser {
         return MDDocument(blocks: blocks, blockLines: ctx.starts, footnotes: ctx.footnotes, frontMatter: frontMatter)
     }
 
+    /// Characters allowed inside citation keys (`@key`).
+    public static func isCitationKeyCharacter(_ ch: Character) -> Bool { InlineParser.isCitationKeyChar(ch) }
+
+    /// Only the front matter of a document (cheap; reads at most the first 300 lines).
+    public static func frontMatter(of text: String) -> [String: String] {
+        guard text.hasPrefix("---") else { return [:] }
+        let lines = text.prefix(20_000).replacingOccurrences(of: "\r\n", with: "\n")
+            .components(separatedBy: "\n").prefix(300)
+        return parseFrontMatter(Array(lines)).0
+    }
+
     /// State collected while parsing the top level of a document.
     final class ParseContext {
         let lineOffset: Int
@@ -112,24 +123,32 @@ public enum MarkdownParser {
                 continue
             }
 
-            // Display math
+            // Display math (optionally labelled: `$$ … $$ {#eq:label}`)
             if indent < 4, trimmed.hasPrefix("$$") {
-                let rest = trimmed.dropFirst(2)
-                if rest.trimmingCharacters(in: .whitespaces).hasSuffix("$$"), rest.trimmingCharacters(in: .whitespaces).count > 2 {
-                    let tex = rest.trimmingCharacters(in: .whitespaces).dropLast(2)
-                    blocks.append(.mathBlock(tex.trimmingCharacters(in: .whitespaces)))
+                func equation(_ tex: String, _ label: String?) -> MDBlock {
+                    guard let label else { return .mathBlock(tex) }
+                    return .figure(MDFigure(kind: .equation, id: label, caption: [], content: .mathBlock(tex)))
+                }
+                let first = trailingAttribute(String(trimmed.dropFirst(2)))
+                let rest = first.text
+                if rest.hasSuffix("$$"), rest.count > 2 {
+                    let tex = rest.dropLast(2)
+                    blocks.append(equation(tex.trimmingCharacters(in: .whitespaces), first.id))
                     i += 1
                     continue
                 }
                 var tex: [String] = []
-                if !rest.trimmingCharacters(in: .whitespaces).isEmpty { tex.append(String(rest)) }
+                if !rest.isEmpty { tex.append(rest) }
                 var j = i + 1
                 var closed = false
+                var label: String?
                 while j < lines.count {
-                    let t = lines[j].trimmingCharacters(in: .whitespaces)
+                    let closing = trailingAttribute(lines[j].trimmingCharacters(in: .whitespaces))
+                    let t = closing.text
                     if t.hasSuffix("$$") {
                         let before = t.dropLast(2)
                         if !before.isEmpty { tex.append(String(before)) }
+                        label = closing.id
                         closed = true
                         break
                     }
@@ -137,7 +156,7 @@ public enum MarkdownParser {
                     j += 1
                 }
                 if closed {
-                    blocks.append(.mathBlock(tex.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)))
+                    blocks.append(equation(tex.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines), label))
                     i = j + 1
                     continue
                 }
@@ -175,7 +194,8 @@ public enum MarkdownParser {
 
             // ATX heading
             if let heading = atxHeading(trimmed) {
-                blocks.append(.heading(level: heading.level, content: parseInlines(heading.text)))
+                let attr = trailingAttribute(heading.text)
+                blocks.append(.heading(level: heading.level, content: parseInlines(attr.text), id: attr.id))
                 i += 1
                 continue
             }
@@ -235,9 +255,19 @@ public enum MarkdownParser {
                         rows.append(cells.map(parseInlines))
                         i += 1
                     }
-                    blocks.append(.table(MDTable(header: header.map(parseInlines),
-                                                 alignments: alignments,
-                                                 rows: rows)))
+                    let table = MDBlock.table(MDTable(header: header.map(parseInlines),
+                                                      alignments: alignments,
+                                                      rows: rows))
+                    // Caption below the table: `Table: Text {#tbl:label}` or `: Text {#tbl:label}`
+                    var k = i
+                    if k < lines.count, isBlank(lines[k]), k + 1 < lines.count { k += 1 }
+                    if k < lines.count, let caption = tableCaption(lines[k]) {
+                        let attr = trailingAttribute(caption)
+                        blocks.append(.figure(MDFigure(kind: .table, id: attr.id, caption: parseInlines(attr.text), content: table)))
+                        i = k + 1
+                    } else {
+                        blocks.append(table)
+                    }
                     continue
                 }
             }
@@ -261,9 +291,12 @@ public enum MarkdownParser {
             }
             let text = para.joined(separator: "\n")
             if let level = setextLevel {
-                blocks.append(.heading(level: level, content: parseInlines(text.trimmingCharacters(in: .whitespaces))))
+                let attr = trailingAttribute(text.trimmingCharacters(in: .whitespaces))
+                blocks.append(.heading(level: level, content: parseInlines(attr.text), id: attr.id))
+            } else if isTOCPlaceholder(text) {
+                blocks.append(.tableOfContents(title: "", entries: []))
             } else {
-                blocks.append(.paragraph(parseInlines(trimTrailingWhitespace(text))))
+                blocks.append(paragraphOrFigure(trimTrailingWhitespace(text)))
             }
         }
         if let ctx {
@@ -476,6 +509,53 @@ public enum MarkdownParser {
         return nil
     }
 
+    /// Splits a trailing Pandoc attribute block (`{#id}`, `{#id .class}`, `{-}`) from a line.
+    static func trailingAttribute(_ s: String) -> (text: String, id: String?) {
+        let trimmed = s.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasSuffix("}"), let open = trimmed.range(of: "{", options: .backwards) else { return (trimmed, nil) }
+        let inner = trimmed[open.upperBound..<trimmed.index(before: trimmed.endIndex)]
+        guard let first = inner.first, first == "#" || first == "." || first == "-",
+              !inner.contains("{"), inner.count < 120 else { return (trimmed, nil) }
+        var id: String?
+        for part in inner.split(separator: " ") where part.hasPrefix("#") && part.count > 1 {
+            let candidate = String(part.dropFirst())
+            guard candidate.allSatisfy({ $0.isLetter || $0.isNumber || "_:.-".contains($0) }) else { return (trimmed, nil) }
+            id = candidate
+        }
+        let text = String(trimmed[..<open.lowerBound]).trimmingCharacters(in: .whitespaces)
+        return (text, id)
+    }
+
+    /// `Table: caption` or `: caption` directly below a table.
+    static func tableCaption(_ line: String) -> String? {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        for prefix in ["Table:", "table:", ":"] where t.hasPrefix(prefix) {
+            let rest = t.dropFirst(prefix.count)
+            guard rest.first == " " else { continue }
+            return rest.trimmingCharacters(in: .whitespaces)
+        }
+        return nil
+    }
+
+    static func isTOCPlaceholder(_ text: String) -> Bool {
+        ["[toc]", "[[toc]]", "[[_toc_]]", "${toc}"].contains(text.trimmingCharacters(in: .whitespaces).lowercased())
+    }
+
+    /// A paragraph that holds only an image with a `{#fig:label}` attribute becomes a numbered figure.
+    static func paragraphOrFigure(_ text: String) -> MDBlock {
+        let attr = trailingAttribute(text)
+        if let id = attr.id, attr.text.hasPrefix("![") {
+            let inlines = parseInlines(attr.text)
+            let chars = Array(attr.text)
+            if inlines.count == 1, case .image = inlines[0],
+               let (alt, _, _, end) = InlineParser(chars).linkAt(1), end == chars.count {
+                // The alt text (with its formatting) is the caption
+                return .figure(MDFigure(kind: .figure, id: id, caption: parseInlines(alt), content: .paragraph(inlines)))
+            }
+        }
+        return .paragraph(parseInlines(text))
+    }
+
     static func fenceStart(_ t: String) -> (char: Character, count: Int, info: String)? {
         guard let first = t.first, first == "`" || first == "~" else { return nil }
         let count = t.prefix(while: { $0 == first }).count
@@ -656,6 +736,22 @@ struct InlineParser {
                     flush()
                     result.append(.link(text: MarkdownParser.parseInlines(text), url: url, title: title))
                     i = end
+                } else if let (citation, end) = citationGroup(at: i) {
+                    flush(); result.append(.citation(citation)); i = end
+                } else {
+                    buffer.append(ch); i += 1
+                }
+
+            case "@":
+                if let (citation, end) = bareCitation(at: i) {
+                    flush(); result.append(.citation(citation)); i = end
+                } else {
+                    buffer.append(ch); i += 1
+                }
+
+            case "{":
+                if let (nodes, end) = criticMarkup(at: i) {
+                    flush(); result += nodes; i = end
                 } else {
                     buffer.append(ch); i += 1
                 }
@@ -791,6 +887,114 @@ struct InlineParser {
                 }
             }
             if c[k] == "\n" && k + 1 < c.count && c[k + 1] == "\n" { return nil }
+            k += 1
+        }
+        return nil
+    }
+
+    // MARK: Citations
+
+    static func isCitationKeyChar(_ ch: Character) -> Bool {
+        ch.isLetter || ch.isNumber || "_:.#$%&-+?~/".contains(ch)
+    }
+
+    /// Reads a citation key starting at `pos` (after `@`); trailing punctuation is not part of the key.
+    func citationKey(from pos: Int) -> Int? {
+        guard pos < c.count, c[pos].isLetter || c[pos].isNumber || c[pos] == "_" else { return nil }
+        var k = pos
+        while k < c.count, InlineParser.isCitationKeyChar(c[k]) { k += 1 }
+        while k > pos + 1, ".:#$%&-+?~/".contains(c[k - 1]) { k -= 1 }
+        return k
+    }
+
+    /// `[see @key, p. 33; @other]`
+    func citationGroup(at pos: Int) -> (MDCitation, Int)? {
+        var k = pos + 1
+        while k < c.count, c[k] != "]" {
+            if c[k] == "[" { return nil }
+            if c[k] == "\n", k + 1 < c.count, c[k + 1] == "\n" { return nil }
+            k += 1
+        }
+        guard k < c.count, k > pos + 1 else { return nil }
+        let inner = String(c[(pos + 1)..<k])
+        guard inner.contains("@") else { return nil }
+        var items: [MDCitationItem] = []
+        for part in inner.split(separator: ";", omittingEmptySubsequences: false) {
+            guard let item = InlineParser.citationItem(String(part)) else { return nil }
+            items.append(item)
+        }
+        let raw = String(c[pos...k])
+        return (MDCitation(items: items, inText: false, raw: raw), k + 1)
+    }
+
+    static func citationItem(_ part: String) -> MDCitationItem? {
+        let chars = Array(part)
+        var at: Int?
+        for (idx, ch) in chars.enumerated() where ch == "@" {
+            let before = idx > 0 ? chars[idx - 1] : " "
+            if before.isWhitespace || before == "-" { at = idx; break }
+        }
+        guard let at else { return nil }
+        let parser = InlineParser(chars)
+        guard let end = parser.citationKey(from: at + 1) else { return nil }
+        var prefixEnd = at
+        var suppress = false
+        if at > 0, chars[at - 1] == "-", at < 2 || chars[at - 2].isWhitespace {
+            suppress = true
+            prefixEnd = at - 1
+        }
+        let prefix = String(chars[..<prefixEnd]).trimmingCharacters(in: .whitespacesAndNewlines)
+        var locator = String(chars[end...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if locator.hasPrefix(",") { locator = String(locator.dropFirst()).trimmingCharacters(in: .whitespaces) }
+        return MDCitationItem(key: String(chars[(at + 1)..<end]), prefix: prefix, locator: locator, suppressAuthor: suppress)
+    }
+
+    /// `@key` in running text, optionally followed by a locator: `@key [p. 33]`.
+    func bareCitation(at pos: Int) -> (MDCitation, Int)? {
+        if pos > 0 {
+            let prev = c[pos - 1]
+            if prev.isLetter || prev.isNumber || "_.-@/\\`:+".contains(prev) { return nil }
+        }
+        guard let end = citationKey(from: pos + 1) else { return nil }
+        var item = MDCitationItem(key: String(c[(pos + 1)..<end]))
+        var stop = end
+        if end + 1 < c.count, c[end] == " ", c[end + 1] == "[" {
+            var k = end + 2
+            while k < c.count, c[k] != "]", c[k] != "[", c[k] != "@", c[k] != "\n" { k += 1 }
+            if k < c.count, c[k] == "]", k > end + 2, !(k + 1 < c.count && (c[k + 1] == "(" || c[k + 1] == "[")) {
+                item.locator = String(c[(end + 2)..<k]).trimmingCharacters(in: .whitespaces)
+                stop = k + 1
+            }
+        }
+        return (MDCitation(items: [item], inText: true, raw: String(c[pos..<stop])), stop)
+    }
+
+    // MARK: CriticMarkup
+
+    func criticMarkup(at pos: Int) -> ([MDInline], Int)? {
+        guard pos + 2 < c.count else { return nil }
+        let opener = String(c[(pos + 1)...(pos + 2)])
+        let closers = ["++": "++}", "--": "--}", "~~": "~~}", "==": "==}", ">>": "<<}"]
+        guard let closer = closers[opener] else { return nil }
+        let closeChars = Array(closer)
+        var k = pos + 3
+        while k + 2 < c.count {
+            if c[k] == closeChars[0], c[k + 1] == closeChars[1], c[k + 2] == closeChars[2] {
+                let inner = String(c[(pos + 3)..<k])
+                let end = k + 3
+                switch opener {
+                case "++": return ([.insertion(MarkdownParser.parseInlines(inner))], end)
+                case "--": return ([.deletion(MarkdownParser.parseInlines(inner))], end)
+                case "==": return ([.highlight(MarkdownParser.parseInlines(inner))], end)
+                case ">>": return ([.comment(inner.trimmingCharacters(in: .whitespacesAndNewlines))], end)
+                default:
+                    let parts = inner.components(separatedBy: "~>")
+                    guard parts.count == 2 else { return nil }
+                    return ([.deletion(MarkdownParser.parseInlines(parts[0])),
+                             .insertion(MarkdownParser.parseInlines(parts[1]))], end)
+                }
+            }
+            if c[k] == "\n", k + 1 < c.count, c[k + 1] == "\n" { return nil }
             k += 1
         }
         return nil

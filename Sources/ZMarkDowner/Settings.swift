@@ -27,7 +27,13 @@ final class Settings {
             "renderMath": true,
             "renderDiagrams": true,
             "readableWidth": 860.0,
+            "citationStyle": CitationStyle.vancouver.rawValue,
+            "numberSections": false,
+            "revisionMode": DocumentImporter.RevisionMode.markup.rawValue,
+            "liveFormatting": false,
+            "dailyWordGoal": 0,
         ])
+        DocumentImporter.revisionMode = revisionMode
     }
 
     private func changed() {
@@ -157,14 +163,72 @@ final class Settings {
         set { defaults.set(newValue, forKey: "renderDiagrams"); changed() }
     }
 
+    // MARK: Writing (citations, Word)
+
+    var citationStyle: CitationStyle {
+        get { CitationStyle(rawValue: defaults.string(forKey: "citationStyle") ?? "") ?? .vancouver }
+        set { defaults.set(newValue.rawValue, forKey: "citationStyle"); changed() }
+    }
+
+    /// Bibliography (.bib / .json) used when a document does not name one.
+    var defaultBibliographyPath: String {
+        get { defaults.string(forKey: "defaultBibliographyPath") ?? "" }
+        set { defaults.set(newValue, forKey: "defaultBibliographyPath"); changed() }
+    }
+
+    var defaultBibliography: URL? {
+        defaultBibliographyPath.isEmpty ? nil : URL(fileURLWithPath: defaultBibliographyPath)
+    }
+
+    var numberSections: Bool {
+        get { defaults.bool(forKey: "numberSections") }
+        set { defaults.set(newValue, forKey: "numberSections"); changed() }
+    }
+
+    /// Word template (.dotx / .docx) for DOCX export.
+    var wordTemplatePath: String {
+        get { defaults.string(forKey: "wordTemplatePath") ?? "" }
+        set { defaults.set(newValue, forKey: "wordTemplatePath"); changed() }
+    }
+
+    var revisionMode: DocumentImporter.RevisionMode {
+        get { DocumentImporter.RevisionMode(rawValue: defaults.string(forKey: "revisionMode") ?? "") ?? .markup }
+        set {
+            defaults.set(newValue.rawValue, forKey: "revisionMode")
+            DocumentImporter.revisionMode = newValue
+            changed()
+        }
+    }
+
+    /// Hides Markdown markup outside the line being edited (WYSIWYG-like editing).
+    var liveFormatting: Bool {
+        get { defaults.bool(forKey: "liveFormatting") }
+        set { defaults.set(newValue, forKey: "liveFormatting"); changed() }
+    }
+
+    /// Words to write per day (0 = no goal).
+    var dailyWordGoal: Int {
+        get { defaults.integer(forKey: "dailyWordGoal") }
+        set { defaults.set(max(0, newValue), forKey: "dailyWordGoal"); changed() }
+    }
+
+    var processingOptions: ProcessingOptions {
+        ProcessingOptions(citationStyle: citationStyle, defaultBibliography: defaultBibliography, numberSections: numberSections)
+    }
+
     var pageSetup: PageSetup {
         PageSetup(paperSize: paper == .a4 ? PageSetup.a4 : PageSetup.letter, pageNumbers: pageNumbers)
     }
 
     /// Export options for a document.
     func exportOptions(title: String, baseURL: URL?) -> ExportOptions {
-        ExportOptions(title: title, baseURL: baseURL, theme: previewTheme, customCSS: customCSS,
-                      pageSetup: pageSetup, headHTML: WebAssets.headHTML(for: .export),
-                      assetsDirectory: WebAssets.directory, language: AppLanguage.current)
+        var options = ExportOptions(title: title, baseURL: baseURL, theme: previewTheme, customCSS: customCSS,
+                                    pageSetup: pageSetup, headHTML: WebAssets.headHTML(for: .export),
+                                    assetsDirectory: WebAssets.directory, language: AppLanguage.current)
+        options.citationStyle = citationStyle
+        options.defaultBibliography = defaultBibliography
+        options.numberSections = numberSections
+        options.docxTemplate = wordTemplatePath.isEmpty ? nil : URL(fileURLWithPath: wordTemplatePath)
+        return options
     }
 }

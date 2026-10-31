@@ -62,10 +62,90 @@ public final class WebPDFRenderer: NSObject, WKNavigationDelegate {
         // Wait for fonts, images and asynchronous renderers (math, diagrams) declared by the page
         _ = try? await webView.callAsyncJavaScript(Self.waitScript, arguments: [:], in: nil, contentWorld: .page)
 
-        let breaks = try await breakCandidates()
+        var breaks = try await breakCandidates()
         let config = WKPDFConfiguration()
-        let tall = try await webView.pdf(configuration: config)
-        return try paginate(tall, breaks: breaks, setup: setup)
+        var tall = try await webView.pdf(configuration: config)
+        var slices = try pageSlices(tall, breaks: breaks, setup: setup)
+
+        // Table of contents: write the page numbers, then lay out again (at most twice)
+        if try await hasTableOfContents() {
+            for _ in 0..<2 {
+                let anchors = try await anchorPositions()
+                let pages = anchors.mapValues { y in (slices.firstIndex { y >= $0.0 - 1 && y < $0.1 } ?? 0) + 1 }
+                try await fillTableOfContents(pages)
+                breaks = try await breakCandidates()
+                tall = try await webView.pdf(configuration: config)
+                let updated = try pageSlices(tall, breaks: breaks, setup: setup)
+                let changed = updated.count != slices.count || zip(updated, slices).contains { abs($0.0 - $1.0) > 0.5 }
+                slices = updated
+                if !changed { break }
+            }
+        }
+        let links = try await linkRects()
+        let anchors = try await anchorPositions()
+        return try paginate(tall, slices: slices, links: links, anchors: anchors, setup: setup)
+    }
+
+    private func hasTableOfContents() async throws -> Bool {
+        let r = try await webView.callAsyncJavaScript("return document.querySelector('.toc-page') !== null;",
+                                                      arguments: [:], in: nil, contentWorld: .page)
+        return (r as? Bool) ?? false
+    }
+
+    /// Document y position (CSS px) of every element that an internal link points to.
+    private func anchorPositions() async throws -> [String: CGFloat] {
+        let script = """
+        const out = {};
+        const top = window.scrollY;
+        const ids = new Set();
+        document.querySelectorAll('a[href^="#"]').forEach(a => {
+          try { ids.add(decodeURIComponent(a.getAttribute('href').slice(1))); } catch (e) {}
+        });
+        document.querySelectorAll('.toc-page[data-target]').forEach(el => ids.add(el.dataset.target));
+        ids.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) { out[id] = el.getBoundingClientRect().top + top; }
+        });
+        return JSON.stringify(out);
+        """
+        guard let json = try await webView.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page) as? String,
+              let obj = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Double] else { return [:] }
+        return obj.mapValues { CGFloat($0) }
+    }
+
+    private func fillTableOfContents(_ pages: [String: Int]) async throws {
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: pages), as: UTF8.self)
+        _ = try await webView.callAsyncJavaScript("""
+        const pages = JSON.parse(map);
+        document.querySelectorAll('.toc-page[data-target]').forEach(el => {
+          const p = pages[el.dataset.target]; el.textContent = p ? String(p) : '';
+        });
+        return true;
+        """, arguments: ["map": json], in: nil, contentWorld: .page)
+    }
+
+    struct LinkRect { var rect: CGRect; var href: String }
+
+    /// Rectangles of all links in document coordinates (CSS px).
+    private func linkRects() async throws -> [LinkRect] {
+        let script = """
+        const out = [];
+        const top = window.scrollY, left = window.scrollX;
+        document.querySelectorAll('a[href]').forEach(a => {
+          const href = a.getAttribute('href');
+          for (const r of a.getClientRects()) {
+            if (r.width > 0 && r.height > 0) { out.push([r.left + left, r.top + top, r.width, r.height, href]); }
+          }
+        });
+        return JSON.stringify(out);
+        """
+        guard let json = try await webView.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page) as? String,
+              let list = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[Any]] else { return [] }
+        return list.compactMap { item in
+            guard item.count == 5, let x = item[0] as? Double, let y = item[1] as? Double, let w = item[2] as? Double,
+                  let h = item[3] as? Double, let href = item[4] as? String else { return nil }
+            return LinkRect(rect: CGRect(x: x, y: y, width: w, height: h), href: href)
+        }
     }
 
     private static let waitScript = """
@@ -87,7 +167,7 @@ public final class WebPDFRenderer: NSObject, WKNavigationDelegate {
           range.selectNodeContents(el);
           for (const r of range.getClientRects()) { if (r.height > 0) ys.push(r.bottom + top); }
         }
-        const blocks = document.querySelectorAll('p, li, tr, pre, blockquote, hr, img, table, ul, ol, .math-display, .mermaid, svg, figure, .front-matter');
+        const blocks = document.querySelectorAll('p, li, tr, pre, blockquote, hr, img, table, ul, ol, .math-display, .mermaid, svg, figure, .front-matter, .csl-entry, .equation, nav.toc');
         for (const el of blocks) { const r = el.getBoundingClientRect(); ys.push(r.bottom + top); }
         // Prefer breaking before headings (keep a heading with the text that follows it)
         for (const h of document.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
@@ -109,13 +189,17 @@ public final class WebPDFRenderer: NSObject, WKNavigationDelegate {
         return Array(Set(filtered.map { ($0 * 2).rounded() / 2 })).sorted()
     }
 
-    private func paginate(_ data: Data, breaks: [CGFloat], setup: PageSetup) throws -> Data {
+    private func tallPage(_ data: Data) throws -> CGPDFPage {
         guard let provider = CGDataProvider(data: data as CFData),
               let source = CGPDFDocument(provider), let page = source.page(at: 1) else {
             throw ExportError.renderingFailed("PDF")
         }
-        let box = page.getBoxRect(.mediaBox)
-        let totalHeight = box.height                     // CSS px == PDF units of the tall page
+        return page
+    }
+
+    /// Vertical ranges (CSS px) of the tall page that become the printed pages.
+    private func pageSlices(_ data: Data, breaks: [CGFloat], setup: PageSetup) throws -> [(CGFloat, CGFloat)] {
+        let totalHeight = try tallPage(data).getBoxRect(.mediaBox).height   // CSS px == PDF units of the tall page
         let pageCSSHeight = setup.contentHeight / Self.scale
 
         // Choose page slices
@@ -135,7 +219,14 @@ public final class WebPDFRenderer: NSObject, WKNavigationDelegate {
         }
         // Drop a trailing slice that only contains whitespace padding
         if slices.count > 1, let last = slices.last, last.1 - last.0 < 4 { slices.removeLast() }
+        return slices
+    }
 
+    private func paginate(_ data: Data, slices: [(CGFloat, CGFloat)], links: [LinkRect], anchors: [String: CGFloat],
+                          setup: PageSetup) throws -> Data {
+        let page = try tallPage(data)
+        let box = page.getBoxRect(.mediaBox)
+        let totalHeight = box.height
         let out = NSMutableData()
         var mediaBox = CGRect(origin: .zero, size: setup.paperSize)
         guard let consumer = CGDataConsumer(data: out as CFMutableData),
@@ -155,6 +246,23 @@ public final class WebPDFRenderer: NSObject, WKNavigationDelegate {
             ctx.scaleBy(x: s, y: s)
             ctx.drawPDFPage(page)
             ctx.restoreGState()
+
+            // Link annotations and named destinations for this page
+            func pageY(_ y: CGFloat) -> CGFloat { contentTop - (y - slice.0) * s }
+            for (name, y) in anchors where y >= slice.0 - 1 && y < slice.1 {
+                ctx.addDestination(name as CFString, at: CGPoint(x: setup.margin, y: min(setup.paperSize.height, pageY(y) + 12)))
+            }
+            for link in links where link.rect.midY >= slice.0 && link.rect.midY < slice.1 {
+                let rect = CGRect(x: setup.margin + link.rect.minX * s, y: pageY(link.rect.maxY),
+                                  width: link.rect.width * s, height: link.rect.height * s)
+                if link.href.hasPrefix("#") {
+                    let name = String(link.href.dropFirst()).removingPercentEncoding ?? String(link.href.dropFirst())
+                    if anchors[name] != nil { ctx.setDestination(name as CFString, for: rect) }
+                } else if let url = URL(string: link.href), let scheme = url.scheme?.lowercased(),
+                          ["http", "https", "mailto"].contains(scheme) {
+                    ctx.setURL(url as CFURL, for: rect)
+                }
+            }
 
             if setup.pageNumbers {
                 drawPageNumber(ctx, number: index + 1, total: slices.count, setup: setup)

@@ -26,6 +26,12 @@ public struct ExportOptions {
     /// Directory served as `zmd-asset://` (bundled JavaScript renderers and fonts).
     public var assetsDirectory: URL?
     public var language: String
+    /// Citations, numbering and cross-references.
+    public var citationStyle: CitationStyle = .vancouver
+    public var defaultBibliography: URL?
+    public var numberSections = false
+    /// Word template (.dotx / .docx) for DOCX export; front matter `reference-doc` wins.
+    public var docxTemplate: URL?
 
     public init(title: String, baseURL: URL? = nil, theme: PreviewTheme = .github, customCSS: String = "",
                 pageSetup: PageSetup = PageSetup(), headHTML: String = "", assetsDirectory: URL? = nil,
@@ -38,6 +44,18 @@ public struct ExportOptions {
         self.pageSetup = pageSetup
         self.headHTML = headHTML
         self.language = language
+    }
+}
+
+extension ExportOptions {
+    public var processingOptions: ProcessingOptions {
+        ProcessingOptions(baseURL: baseURL, citationStyle: citationStyle, defaultBibliography: defaultBibliography,
+                          numberSections: numberSections)
+    }
+
+    /// Parses and processes Markdown (citations, numbering, cross-references, table of contents).
+    public func prepare(_ markdown: String) -> MDDocument {
+        DocumentProcessor.process(markdown: markdown, options: processingOptions).document
     }
 }
 
@@ -83,7 +101,7 @@ public enum PDFExporter {
 
     /// Standalone HTML page with embedded local images.
     public static func html(markdown: String, options: ExportOptions, forExport: Bool = true) -> String {
-        let doc = MDDocument(markdown: markdown)
+        let doc = options.prepare(markdown)
         let base = options.baseURL
         let body = HTMLRenderer.render(document: doc, options: .init(imageURL: { LocalImage.dataURI($0, base: base) }))
         let title = doc.title ?? options.title

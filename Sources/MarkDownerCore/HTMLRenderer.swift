@@ -108,9 +108,11 @@ public struct HTMLRenderer {
 
     mutating func render(_ block: MDBlock, tight: Bool) -> String {
         switch block {
-        case .heading(let level, let content):
-            var id = Self.slug(content.plainText)
-            if let n = usedIDs[id] { usedIDs[id] = n + 1; id += "-\(n)" } else { usedIDs[id] = 1 }
+        case .heading(let level, let content, let explicitID):
+            var id = explicitID ?? Self.slug(content.plainText)
+            if explicitID == nil {
+                if let n = usedIDs[id] { usedIDs[id] = n + 1; id += "-\(n)" } else { usedIDs[id] = 1 }
+            }
             return "<h\(level) id=\"\(Self.escape(id))\">\(render(content))</h\(level)>"
 
         case .paragraph(let content):
@@ -187,7 +189,49 @@ public struct HTMLRenderer {
 
         case .horizontalRule:
             return "<hr\(voidClose)"
+
+        case .figure(let figure):
+            let idAttr = figure.id.map { " id=\"\(Self.escape($0))\"" } ?? ""
+            switch figure.kind {
+            case .equation:
+                let number = figure.label.map { "<span class=\"eq-number\">\(Self.escape($0))</span>" } ?? ""
+                return "<div class=\"equation\"\(idAttr)>\(render(figure.content, tight: false))\(number)</div>"
+            case .figure:
+                return "<figure class=\"figure\"\(idAttr)>\(render(figure.content, tight: true))\(caption(figure))</figure>"
+            case .table:
+                return "<figure class=\"table-figure\"\(idAttr)>\(caption(figure))\(render(figure.content, tight: false))</figure>"
+            }
+
+        case .tableOfContents(let title, let entries):
+            guard !entries.isEmpty else { return "" }
+            var html = "<nav class=\"toc\">"
+            if !title.isEmpty { html += "<p class=\"toc-title\">\(Self.escape(title))</p>" }
+            html += "<ul>"
+            for e in entries {
+                let anchor = Self.escape(e.anchor)
+                html += "<li class=\"toc-level-\(e.level)\"><a href=\"#\(anchor)\"><span class=\"toc-text\">\(Self.escape(e.text))</span>"
+                    + "<span class=\"toc-page\" data-target=\"\(anchor)\"></span></a></li>"
+            }
+            return html + "</ul></nav>"
+
+        case .bibliography(let items):
+            var html = "<div class=\"references\" id=\"refs\">"
+            for item in items {
+                let label = item.label.map { "<span class=\"csl-label\">\(Self.escape($0))</span> " } ?? ""
+                let cls = item.label == nil ? "csl-entry hanging" : "csl-entry numbered"
+                html += "<div class=\"\(cls)\" id=\"\(Self.escape(item.anchor))\">\(label)<span class=\"csl-body\">\(render(item.content))</span></div>"
+            }
+            return html + "</div>"
         }
+    }
+
+    private mutating func caption(_ figure: MDFigure) -> String {
+        guard !figure.caption.isEmpty || figure.label != nil else { return "" }
+        var html = "<figcaption>"
+        if let label = figure.label {
+            html += "<span class=\"caption-label\">\(Self.escape(label))\(figure.caption.isEmpty ? "" : ":")</span> "
+        }
+        return html + render(figure.caption) + "</figcaption>"
     }
 
     // MARK: Inlines
@@ -212,6 +256,16 @@ public struct HTMLRenderer {
             case .softBreak: out += "\n"
             case .math(let tex):
                 out += "<span class=\"math math-inline\">\(Self.escape(tex))</span>"
+            case .citation(let c):
+                out += Self.escape(c.raw)
+            case .insertion(let c):
+                out += "<ins class=\"critic\">\(render(c))</ins>"
+            case .deletion(let c):
+                out += "<del class=\"critic\">\(render(c))</del>"
+            case .highlight(let c):
+                out += "<mark class=\"critic\">\(render(c))</mark>"
+            case .comment(let text):
+                out += "<span class=\"critic-comment\">\(Self.escape(text))</span>"
             case .footnoteRef(let id):
                 guard footnoteDefinitions[id] != nil else {
                     out += Self.escape("[^\(id)]")

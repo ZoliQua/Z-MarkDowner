@@ -7,10 +7,10 @@ final class ParserTests: XCTestCase {
     func testHeadingsAndParagraphs() {
         let doc = MDDocument(markdown: "# Cím\n\nElső *dőlt* és **félkövér** szöveg.\n\nAlcím\n-----")
         XCTAssertEqual(doc.blocks.count, 3)
-        XCTAssertEqual(doc.blocks[0], .heading(level: 1, content: [.text("Cím")]))
+        XCTAssertEqual(doc.blocks[0], .heading(level: 1, content: [.text("Cím")], id: nil))
         XCTAssertEqual(doc.blocks[1], .paragraph([.text("Első "), .emphasis([.text("dőlt")]), .text(" és "),
                                                   .strong([.text("félkövér")]), .text(" szöveg.")]))
-        XCTAssertEqual(doc.blocks[2], .heading(level: 2, content: [.text("Alcím")]))
+        XCTAssertEqual(doc.blocks[2], .heading(level: 2, content: [.text("Alcím")], id: nil))
     }
 
     func testNestedEmphasis() {

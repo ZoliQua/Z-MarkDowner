@@ -11,6 +11,7 @@ final class PreferencesWindowController: NSWindowController {
             (L("prefs.general", "General"), "gearshape", GeneralPane()),
             (L("prefs.editor", "Editor"), "character.cursor.ibeam", EditorPane()),
             (L("prefs.preview", "Preview & Export"), "doc.richtext", PreviewPane()),
+            (L("prefs.writing", "Writing"), "text.book.closed", WritingPane()),
         ]
         for (title, symbol, vc) in items {
             let item = NSTabViewItem(viewController: vc)
@@ -162,7 +163,9 @@ final class EditorPane: FormPane {
 
         row(L("prefs.typing", "Typing"), checkbox(L("prefs.autoPair", "Auto-close brackets and quotes"), Settings.shared.autoPair, action: #selector(autoPairChanged(_:))))
         row("", checkbox(L("prefs.spellCheck", "Check spelling while typing"), Settings.shared.spellCheck, action: #selector(spellChanged(_:))))
-        row(L("prefs.modes", "Writing modes"), checkbox(L("menu.focusMode", "Focus Mode"), Settings.shared.focusMode, action: #selector(focusChanged(_:))))
+        row(L("prefs.modes", "Writing modes"), checkbox(L("menu.liveFormatting", "Live Formatting"), Settings.shared.liveFormatting, action: #selector(liveChanged(_:))))
+        row("", note(L("prefs.liveNote", "Hides the Markdown markup except on the line you are editing, like a word processor.")))
+        row("", checkbox(L("menu.focusMode", "Focus Mode"), Settings.shared.focusMode, action: #selector(focusChanged(_:))))
         row("", checkbox(L("menu.typewriter", "Typewriter Scrolling"), Settings.shared.typewriterMode, action: #selector(typewriterChanged(_:))))
     }
 
@@ -178,6 +181,7 @@ final class EditorPane: FormPane {
     @objc private func autoPairChanged(_ sender: NSButton) { Settings.shared.autoPair = sender.state == .on }
     @objc private func spellChanged(_ sender: NSButton) { Settings.shared.spellCheck = sender.state == .on }
     @objc private func focusChanged(_ sender: NSButton) { Settings.shared.focusMode = sender.state == .on }
+    @objc private func liveChanged(_ sender: NSButton) { Settings.shared.liveFormatting = sender.state == .on }
     @objc private func typewriterChanged(_ sender: NSButton) { Settings.shared.typewriterMode = sender.state == .on }
 }
 
@@ -237,6 +241,86 @@ final class PreviewPane: FormPane {
         Settings.shared.customCSSPath = ""
         updateCSSLabel()
     }
+}
+
+/// Citations, numbering, Word templates and goals.
+final class WritingPane: FormPane {
+    private let bibLabel = NSTextField(labelWithString: "")
+    private let templateLabel = NSTextField(labelWithString: "")
+    private let goalField = NSTextField()
+
+    override func build() {
+        let styles = CitationStyle.allCases.map(\.displayName)
+        let st = CitationStyle.allCases.firstIndex(of: Settings.shared.citationStyle) ?? 0
+        row(L("prefs.citationStyle", "Citation style"), popup(styles, selected: st, action: #selector(styleChanged(_:))))
+
+        row(L("prefs.bibliography", "Default bibliography"), fileRow(bibLabel, choose: #selector(chooseBibliography), clear: #selector(clearBibliography)))
+        row("", note(L("prefs.bibliographyNote", "A BibTeX (.bib) or CSL-JSON file, e.g. exported from Zotero. Documents can name their own with “bibliography: refs.bib” in the front matter.")))
+
+        row(L("prefs.numbering", "Numbering"), checkbox(L("prefs.numberSections", "Number headings (1, 1.1, 1.2 …)"), Settings.shared.numberSections, action: #selector(numberingChanged(_:))))
+
+        row(L("prefs.wordTemplate", "Word template"), fileRow(templateLabel, choose: #selector(chooseTemplate), clear: #selector(clearTemplate)))
+        row("", note(L("prefs.wordTemplateNote", "A .dotx or .docx file whose styles, page setup, headers and footers are used for Word export (front matter: reference-doc).")))
+
+        let modes = [L("prefs.revisionsMarkup", "Keep as review marks"), L("prefs.revisionsAccept", "Accept all changes, drop comments")]
+        let m = DocumentImporter.RevisionMode.allCases.firstIndex(of: Settings.shared.revisionMode) ?? 0
+        row(L("prefs.revisions", "Word changes & comments"), popup(modes, selected: m, action: #selector(revisionsChanged(_:))))
+
+        goalField.placeholderString = L("stats.goalPlaceholder", "words")
+        goalField.alignment = .right
+        goalField.widthAnchor.constraint(equalToConstant: 80).isActive = true
+        goalField.target = self
+        goalField.action = #selector(goalChanged(_:))
+        let goal = Settings.shared.dailyWordGoal
+        goalField.stringValue = goal > 0 ? "\(goal)" : ""
+        row(L("stats.dailyGoal", "Daily goal"), goalField)
+        updateLabels()
+    }
+
+    private func fileRow(_ label: NSTextField, choose: Selector, clear: Selector) -> NSView {
+        label.lineBreakMode = .byTruncatingMiddle
+        label.textColor = .secondaryLabelColor
+        label.widthAnchor.constraint(lessThanOrEqualToConstant: 220).isActive = true
+        let chooseButton = NSButton(title: L("button.choose", "Choose…"), target: self, action: choose)
+        let clearButton = NSButton(title: L("button.clear", "Clear"), target: self, action: clear)
+        let stack = NSStackView(views: [label, chooseButton, clearButton])
+        stack.spacing = 6
+        return stack
+    }
+
+    private func updateLabels() {
+        for (label, path) in [(bibLabel, Settings.shared.defaultBibliographyPath), (templateLabel, Settings.shared.wordTemplatePath)] {
+            label.stringValue = path.isEmpty ? L("prefs.none", "None") : (path as NSString).lastPathComponent
+            label.toolTip = path
+        }
+    }
+
+    private func choose(_ extensions: [String], _ done: @escaping (URL) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = extensions.compactMap { .init(filenameExtension: $0) }
+        guard let window = view.window else { return }
+        panel.beginSheetModal(for: window) { response in
+            guard response == .OK, let url = panel.url else { return }
+            done(url)
+        }
+    }
+
+    @objc private func styleChanged(_ sender: NSPopUpButton) { Settings.shared.citationStyle = CitationStyle.allCases[sender.indexOfSelectedItem] }
+    @objc private func numberingChanged(_ sender: NSButton) { Settings.shared.numberSections = sender.state == .on }
+    @objc private func revisionsChanged(_ sender: NSPopUpButton) {
+        Settings.shared.revisionMode = DocumentImporter.RevisionMode.allCases[sender.indexOfSelectedItem]
+    }
+    @objc private func goalChanged(_ sender: NSTextField) {
+        Settings.shared.dailyWordGoal = Int(sender.stringValue.filter(\.isNumber)) ?? 0
+    }
+    @objc private func chooseBibliography() {
+        choose(["bib", "json"]) { [weak self] url in Settings.shared.defaultBibliographyPath = url.path; self?.updateLabels() }
+    }
+    @objc private func clearBibliography() { Settings.shared.defaultBibliographyPath = ""; updateLabels() }
+    @objc private func chooseTemplate() {
+        choose(["dotx", "docx"]) { [weak self] url in Settings.shared.wordTemplatePath = url.path; self?.updateLabels() }
+    }
+    @objc private func clearTemplate() { Settings.shared.wordTemplatePath = ""; updateLabels() }
 }
 
 /// Restarts the application (used after changing the language).

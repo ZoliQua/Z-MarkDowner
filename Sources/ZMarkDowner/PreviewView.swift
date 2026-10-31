@@ -62,9 +62,16 @@ final class PreviewView: NSView, WKNavigationDelegate, WKScriptMessageHandler {
 
     /// Renders Markdown and updates the page without reloading it (keeps the scroll position).
     func update(markdown: String) {
+        var options = Settings.shared.processingOptions
+        options.baseURL = baseDirectory
+        update(document: DocumentProcessor.process(markdown: markdown, options: options).document)
+    }
+
+    /// Renders an already processed document.
+    func update(document: MDDocument) {
         let base = baseDirectory
         let options = HTMLRenderer.Options(imageURL: { PreviewView.resolveImageURL($0, base: base) }, sourceLines: true)
-        let html = HTMLRenderer.render(document: MDDocument(markdown: markdown), options: options)
+        let html = HTMLRenderer.render(document: document, options: options)
         guard html != lastHTML else { return }
         lastHTML = html
         if isLoaded { push(html) } else { pendingHTML = html }

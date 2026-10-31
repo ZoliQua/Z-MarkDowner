@@ -19,6 +19,16 @@ public enum ImportError: LocalizedError {
 /// Reads MD, TXT, RTF, DOC and DOCX files and turns them into Markdown text.
 public enum DocumentImporter {
 
+    /// How tracked changes and comments in Word documents are imported.
+    public enum RevisionMode: String, CaseIterable {
+        /// Kept as CriticMarkup: `{++inserted++}`, `{--deleted--}`, `{==text==}{>>comment<<}`.
+        case markup
+        /// All changes accepted, comments dropped.
+        case accept
+    }
+
+    public static var revisionMode: RevisionMode = .markup
+
     public static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn"]
     public static let plainTextExtensions: Set<String> = ["txt", "text"]
     public static let richTextExtensions: Set<String> = ["rtf", "rtfd", "doc", "docx", "odt", "html", "htm"]
@@ -39,7 +49,7 @@ public enum DocumentImporter {
 
         if ext == "docx" {
             do {
-                return try DocxReader.markdown(from: Data(contentsOf: url))
+                return try DocxReader.markdown(from: Data(contentsOf: url), revisions: revisionMode)
             } catch {
                 // Fall back to the AppKit reader below (e.g. for unusual packages)
             }
@@ -274,7 +284,11 @@ public enum AttributedToMarkdown {
         var link: String?
         /// Already Markdown (e.g. a footnote marker); not escaped.
         var raw = false
+        /// Tracked change in a Word document.
+        var revision: Revision = .none
     }
+
+    enum Revision { case none, insert, delete }
 
     static func inlineMarkdown(_ attr: NSAttributedString, range: NSRange, suppressBold: Bool = false) -> String {
         guard range.length > 0 else { return "" }
@@ -312,6 +326,25 @@ public enum AttributedToMarkdown {
 
     /// Converts formatted segments (with optional links) into inline Markdown.
     static func inline(from segments: [Segment]) -> String {
+        // Tracked changes become CriticMarkup around runs of inserted or deleted text
+        if segments.contains(where: { $0.revision != .none }) {
+            var out = ""
+            var i = 0
+            while i < segments.count {
+                let revision = segments[i].revision
+                var j = i
+                while j < segments.count, segments[j].revision == revision { j += 1 }
+                let group = segments[i..<j].map { seg -> Segment in var s = seg; s.revision = .none; return s }
+                let inner = inline(from: group)
+                switch revision {
+                case .none: out += inner
+                case .insert: out += inner.isEmpty ? "" : "{++" + inner + "++}"
+                case .delete: out += inner.isEmpty ? "" : "{--" + inner + "--}"
+                }
+                i = j
+            }
+            return out
+        }
         // Group consecutive segments with the same link
         var out = ""
         var i = 0

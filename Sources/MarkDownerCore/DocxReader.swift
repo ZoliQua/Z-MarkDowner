@@ -32,9 +32,12 @@ public struct DocxReader {
     private var numFormats: [String: [Int: String]] = [:]   // numId -> level -> numFmt
     private var relationships: [String: String] = [:]
     private var referencedFootnotes: [String] = []
+    private var revisions: DocumentImporter.RevisionMode = .markup
+    private var comments: [String: (author: String, text: String)] = [:]
 
-    public static func markdown(from data: Data) throws -> String {
+    public static func markdown(from data: Data, revisions: DocumentImporter.RevisionMode = .markup) throws -> String {
         var reader = DocxReader()
+        reader.revisions = revisions
         return try reader.convert(data)
     }
 
@@ -48,8 +51,9 @@ public struct DocxReader {
         if let stylesData = try zip.contents(of: "word/styles.xml") { loadStyles(stylesData) }
         if let numberingData = try zip.contents(of: "word/numbering.xml") { loadNumbering(numberingData) }
         if let relsData = try zip.contents(of: "word/_rels/document.xml.rels") { loadRelationships(relsData) }
+        if revisions == .markup, let commentsData = try zip.contents(of: "word/comments.xml") { loadComments(commentsData) }
 
-        let doc = try XMLDocument(data: documentData, options: [.nodePreserveWhitespace])
+        let doc = try XMLDocument(data: Self.protectWhitespace(documentData), options: [.nodePreserveWhitespace])
         guard let root = doc.rootElement(), let body = child(root, "body") else { return "" }
 
         var paras: [AttributedToMarkdown.Para] = []
@@ -115,10 +119,27 @@ public struct DocxReader {
         }
     }
 
+    private mutating func loadComments(_ data: Data) {
+        guard let doc = try? XMLDocument(data: Self.protectWhitespace(data), options: [.nodePreserveWhitespace]),
+              let root = doc.rootElement() else { return }
+        for el in children(root, "comment") {
+            guard let id = attr(el, "id") else { continue }
+            var texts: [String] = []
+            for p in children(el, "p") {
+                var segs: [AttributedToMarkdown.Segment] = []
+                var maxSize = 0
+                collectRuns(p, base: RunProps(), link: nil, into: &segs, maxSize: &maxSize)
+                let t = segs.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines)
+                if !t.isEmpty { texts.append(t) }
+            }
+            comments[id] = (attr(el, "author") ?? "", texts.joined(separator: " "))
+        }
+    }
+
     /// Footnotes that were referenced in the body, as `[^n]: text` definitions.
     private mutating func footnoteDefinitions(_ data: Data) -> [AttributedToMarkdown.Para] {
         guard !referencedFootnotes.isEmpty,
-              let doc = try? XMLDocument(data: data, options: [.nodePreserveWhitespace]),
+              let doc = try? XMLDocument(data: Self.protectWhitespace(data), options: [.nodePreserveWhitespace]),
               let root = doc.rootElement() else { return [] }
         var result: [AttributedToMarkdown.Para] = []
         for note in children(root, "footnote") {
@@ -169,7 +190,7 @@ public struct DocxReader {
                 }
             case "sdt":
                 if let content = child(el, "sdtContent") { processContainer(content, into: &paras) }
-            case "customXml", "ins":
+            case "customXml", "ins", "moveTo":
                 processContainer(el, into: &paras)
             default:
                 break
@@ -265,6 +286,9 @@ public struct DocxReader {
     private struct FieldState {
         var inInstruction = false
         var link: String?
+        var revision: AttributedToMarkdown.Revision = .none
+        /// Comment id → index in the segment list where its highlighted range starts.
+        var commentStarts: [String: Int] = [:]
     }
 
     private mutating func collectRuns(_ el: XMLElement, base: RunProps, link: String?,
@@ -293,7 +317,15 @@ public struct DocxReader {
                     var text: String?
                     switch item.localName {
                     case "t":
-                        if !field.inInstruction { text = item.stringValue ?? "" }
+                        if !field.inInstruction { text = Self.restoreWhitespace(item.stringValue ?? "") }
+                    case "delText":
+                        if !field.inInstruction, field.revision == .delete { text = Self.restoreWhitespace(item.stringValue ?? "") }
+                    case "commentReference":
+                        if let id = attr(item, "id"), let c = comments[id] {
+                            let body = (c.author.isEmpty ? "" : c.author + ": ") + c.text
+                            segments.append(.init(text: "{>>\(body.replacingOccurrences(of: "<<}", with: "<< }"))<<}", bold: false, italic: false,
+                                                  strike: false, code: false, link: nil, raw: true))
+                        }
                     case "tab", "ptab": text = "\t"
                     case "br", "cr":
                         if attr(item, "type") != "page" && attr(item, "type") != "column" { text = "\n" }
@@ -335,7 +367,7 @@ public struct DocxReader {
                     }
                     segments.append(.init(text: t, bold: props.bold ?? false, italic: props.italic ?? false,
                                           strike: props.strike ?? false, code: props.mono ?? false,
-                                          link: effectiveLink))
+                                          link: effectiveLink, revision: field.revision))
                 }
 
             case "hyperlink":
@@ -344,7 +376,27 @@ public struct DocxReader {
                 if let anchor = attr(node, "anchor") { target = (target ?? "") + "#" + anchor }
                 collectRuns(node, base: base, link: target ?? link, field: &field, into: &segments, maxSize: &maxSize)
 
-            case "ins", "smartTag", "customXml", "fldSimple", "dir", "bdo":
+            case "ins", "moveTo", "del", "moveFrom":
+                let isDeletion = node.localName == "del" || node.localName == "moveFrom"
+                if isDeletion && revisions == .accept { break }
+                let saved = field.revision
+                if revisions == .markup { field.revision = isDeletion ? .delete : .insert }
+                collectRuns(node, base: base, link: link, field: &field, into: &segments, maxSize: &maxSize)
+                field.revision = saved
+
+            case "commentRangeStart":
+                if revisions == .markup, let id = attr(node, "id"), comments[id] != nil { field.commentStarts[id] = segments.count }
+
+            case "commentRangeEnd":
+                // Highlight the commented text when the range lies inside this paragraph
+                if let id = attr(node, "id"), let start = field.commentStarts[id], start < segments.count {
+                    segments.insert(.init(text: "{==", bold: false, italic: false, strike: false, code: false, link: nil, raw: true), at: start)
+                    segments.append(.init(text: "==}", bold: false, italic: false, strike: false, code: false, link: nil, raw: true))
+                    for (other, index) in field.commentStarts where index > start { field.commentStarts[other] = index + 1 }
+                    field.commentStarts[id] = nil
+                }
+
+            case "smartTag", "customXml", "fldSimple", "dir", "bdo":
                 var nestedLink = link
                 if node.localName == "fldSimple", let instr = attr(node, "instr"),
                    let r = instr.range(of: #"HYPERLINK\s+"([^"]+)""#, options: .regularExpression) {
@@ -433,6 +485,29 @@ public struct DocxReader {
     }
 
     // MARK: - XML helpers
+
+    /// XMLDocument drops text nodes that contain only whitespace (even with `.nodePreserveWhitespace`),
+    /// which loses spaces Word keeps in separate runs. They are swapped for private-use characters first.
+    static func protectWhitespace(_ data: Data) -> Data {
+        let xml = String(decoding: data, as: UTF8.self)
+        guard let re = try? NSRegularExpression(pattern: #"(<w:(?:t|delText)\b[^>]*>)([ \t]+)(</w:(?:t|delText)>)"#) else { return data }
+        let ns = xml as NSString
+        var out = ""
+        var last = 0
+        for m in re.matches(in: xml, range: NSRange(location: 0, length: ns.length)) {
+            out += ns.substring(with: NSRange(location: last, length: m.range(at: 2).location - last))
+            out += ns.substring(with: m.range(at: 2)).replacingOccurrences(of: " ", with: "\u{E020}").replacingOccurrences(of: "\t", with: "\u{E009}")
+            last = NSMaxRange(m.range(at: 2))
+        }
+        guard last > 0 else { return data }
+        out += ns.substring(from: last)
+        return Data(out.utf8)
+    }
+
+    static func restoreWhitespace(_ s: String) -> String {
+        guard s.unicodeScalars.contains(where: { $0.value == 0xE020 || $0.value == 0xE009 }) else { return s }
+        return s.replacingOccurrences(of: "\u{E020}", with: " ").replacingOccurrences(of: "\u{E009}", with: "\t")
+    }
 
     private func child(_ el: XMLElement, _ name: String) -> XMLElement? {
         for case let c as XMLElement in el.children ?? [] where c.localName == name { return c }

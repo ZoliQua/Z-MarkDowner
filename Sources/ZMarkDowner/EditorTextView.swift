@@ -16,6 +16,26 @@ final class EditorTextView: NSTextView {
         didSet { updateFocusDimming() }
     }
 
+    /// WYSIWYG-like editing (see LiveFormatting.swift).
+    var liveFormatting = false {
+        didSet {
+            guard liveFormatting != oldValue else { return }
+            layoutManager?.delegate = liveFormatting ? self : nil
+            revealedLines = liveFormatting ? revealedRange(for: selectedRange()) : NSRange(location: NSNotFound, length: 0)
+            let full = NSRange(location: 0, length: nsString.length)
+            layoutManager?.invalidateGlyphs(forCharacterRange: full, changeInLength: 0, actualCharacterRange: nil)
+            layoutManager?.invalidateLayout(forCharacterRange: full, actualCharacterRange: nil)
+            updateDecorations()
+            needsDisplay = true
+        }
+    }
+
+    /// Citation keys and labels offered after `@` (set by the window controller).
+    var citationCandidates: (() -> [String])?
+
+    /// Lines where markup is shown in live formatting mode.
+    var revealedLines = NSRange(location: NSNotFound, length: 0)
+
     var markdownDocument: MarkdownDocument? {
         window?.windowController?.document as? MarkdownDocument
     }
@@ -340,6 +360,7 @@ final class EditorTextView: NSTextView {
     private static let wrappers: Set<String> = ["(", "[", "{", "`", "\"", "*", "_", "~"]
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        defer { if let s = insertString as? String { triggerCitationCompletionIfNeeded(after: s) } }
         guard Settings.shared.autoPair, !hasMarkedText(), let s = insertString as? String, (s as NSString).length == 1 else {
             return super.insertText(insertString, replacementRange: replacementRange)
         }
@@ -392,6 +413,7 @@ final class EditorTextView: NSTextView {
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
         if !stillSelecting {
+            if liveFormatting { updateRevealedLines() }
             if focusMode { updateFocusDimming() }
             if typewriterMode { centerCaret() }
         }
@@ -399,15 +421,23 @@ final class EditorTextView: NSTextView {
 
     override func didChangeText() {
         super.didChangeText()
-        if focusMode { updateFocusDimming() }
+        if focusMode || liveFormatting { updateFocusDimming() }
         if typewriterMode { centerCaret() }
     }
 
-    /// Dims everything except the paragraph containing the caret.
+    override func mouseDown(with event: NSEvent) {
+        if liveFormatting, event.clickCount == 1, toggleCheckbox(at: convert(event.locationInWindow, from: nil)) { return }
+        super.mouseDown(with: event)
+    }
+
+    /// Dims everything except the paragraph containing the caret (and refreshes live formatting decorations).
     func updateFocusDimming() {
+        updateDecorations()
+    }
+
+    func applyFocusDimming() {
         guard let lm = layoutManager else { return }
         let full = NSRange(location: 0, length: nsString.length)
-        lm.removeTemporaryAttribute(.foregroundColor, forCharacterRange: full)
         guard focusMode, full.length > 0 else { return }
         let caret = min(selectedRange().location, max(0, nsString.length - 1))
         let current = paragraphRange(around: caret)
@@ -546,7 +576,7 @@ final class EditorTextView: NSTextView {
     @objc func copyAsRichText(_ sender: Any?) {
         let sel = selectedRange()
         let source = sel.length > 0 ? nsString.substring(with: sel) : string
-        let options = ExportOptions(title: "", baseURL: markdownDocument?.baseDirectory, theme: Settings.shared.previewTheme)
+        let options = Settings.shared.exportOptions(title: "", baseURL: markdownDocument?.baseDirectory)
         let html = PDFExporter.html(markdown: source, options: options)
         let pb = NSPasteboard.general
         pb.clearContents()

@@ -72,6 +72,40 @@ graph LR
 
 Bir ekran görüntüsü yapıştırın (⌘V) veya bir resmi düzenleyiciye sürükleyin: resim, belgenin yanındaki `images` klasörüne kaydedilir.
 
+## Atıflar ve kaynaklar
+
+Front matter içinde bir BibTeX (`.bib`) veya CSL-JSON dosyası belirtin (ya da Ayarlar ▸ Yazma bölümünde varsayılan bir dosya ayarlayın), ardından `[@key]` ile atıf yapın:
+
+```markdown
+---
+bibliography: references.bib
+csl: vancouver        # veya apa
+---
+
+As shown earlier [@kovacs2020, p. 5; @who2019], … @kovacs2020 found …
+```
+
+Kaynak listesi belgenin sonuna (veya `::: {#refs}` … `:::` koyduğunuz yere) eklenir. **Biçim ▸ Atıflar ve Kaynaklar ▸ Atıf Ekle…** (⌃⌘C) kaynakçada arama yapar ve **DOI veya PubMed kimliği** ile yeni kaynaklar ekler. `@` yazdığınızda anahtarlar önerilir.
+
+## Numaralı şekiller, tablolar ve çapraz başvurular
+
+| Biçim | Çıktı |
+|-------|-------|
+| PDF   | sayfa numaralı içindekiler |
+| Word  | gerçek Word içindekiler tablosu, alt yazılar |
+
+Table: Dışa aktarımlar {#tbl:exports}
+
+@tbl:exports çıktı biçimlerini listeler. Şekilleri `![Caption](image.png){#fig:name}`, denklemleri `$$ … $$ {#eq:name}`, başlıkları `# Title {#sec:name}` ile etiketleyin ve bunlara `@fig:name`, `@eq:name`, `@sec:name` ile başvurun. `[TOC]` (veya front matter içinde `toc: true`) içindekiler ekler; `numbersections: true` başlıkları numaralandırır.
+
+## Gözden geçirme: değişiklikler ve yorumlar
+
+Word belgelerindeki izlenen değişiklikler ve yorumlar gözden geçirme işaretleri olarak içe aktarılır ve Word’e yeniden izlenen değişiklikler ve yorumlar olarak dışa aktarılır: {++eklendi++}, {--silindi--}, {~~eski~>yeni~~}, {==vurgulandı==}{>>Bir yorum<<}. Bunları kabul etmek veya reddetmek için **Düzen ▸ Gözden Geçir** menüsünü kullanın.
+
+## Canlı biçimlendirme ve yazma araçları
+
+**Görüntü ▸ Canlı Biçimlendirme** (⌥⌘L), düzenlediğiniz satır dışında Markdown işaretlemesini gizler. İstatistikler, okuma süresi ve yazma hedefleri için durum çubuğundaki kelime sayısını tıklayın. Kenar çubuğundaki **Ara** sekmesi, bir klasördeki tüm Markdown ve metin dosyalarında arama yapar ve değiştirir (⌥⇧⌘F).
+
 ---
 
 **Dışa aktarma:** Dosya ▸ Dışa Aktar ▸ PDF (⇧⌘E), Word (⇧⌘D), HTML veya EPUB.

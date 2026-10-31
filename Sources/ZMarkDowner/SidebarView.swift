@@ -20,6 +20,7 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSO
     private let filesOutline = NSOutlineView()
     private let folderButton = NSButton()
     private let emptyLabel = NSTextField(labelWithString: "")
+    let searchView = FolderSearchView(frame: .zero)
 
     private(set) var headings: [Heading] = []
     private var currentHeadingIndex: Int?
@@ -40,9 +41,11 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSO
         background.translatesAutoresizingMaskIntoConstraints = false
         addSubview(background)
 
-        tabs.segmentCount = 2
+        tabs.segmentCount = 3
         tabs.setLabel(L("sidebar.outline", "Outline"), forSegment: 0)
         tabs.setLabel(L("sidebar.files", "Files"), forSegment: 1)
+        tabs.setLabel(L("sidebar.search", "Search"), forSegment: 2)
+        searchView.folder = { [weak self] in self?.searchFolder }
         tabs.trackingMode = .selectOne
         tabs.segmentStyle = .automatic
         tabs.target = self
@@ -101,7 +104,8 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSO
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
         emptyLabel.stringValue = L("sidebar.noHeadings", "No headings")
 
-        for v in [tabs, outlineScroll, filesScroll, folderButton, emptyLabel] as [NSView] { addSubview(v) }
+        searchView.translatesAutoresizingMaskIntoConstraints = false
+        for v in [tabs, outlineScroll, filesScroll, folderButton, emptyLabel, searchView] as [NSView] { addSubview(v) }
         NSLayoutConstraint.activate([
             background.leadingAnchor.constraint(equalTo: leadingAnchor),
             background.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -121,6 +125,10 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSO
             filesScroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             filesScroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             filesScroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            searchView.topAnchor.constraint(equalTo: tabs.bottomAnchor, constant: 6),
+            searchView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            searchView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            searchView.bottomAnchor.constraint(equalTo: bottomAnchor),
             emptyLabel.centerXAnchor.constraint(equalTo: outlineScroll.centerXAnchor),
             emptyLabel.topAnchor.constraint(equalTo: outlineScroll.topAnchor, constant: 24),
         ])
@@ -137,12 +145,19 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSO
         updateTab()
     }
 
+    /// Folder used by the file browser and the folder search.
+    var searchFolder: URL? {
+        rootNode?.url ?? Settings.shared.sidebarFolder ?? currentFile?.deletingLastPathComponent()
+    }
+
     private func updateTab() {
         let files = tabs.selectedSegment == 1
-        outlineScroll.isHidden = files
-        emptyLabel.isHidden = files || !headings.isEmpty
+        let search = tabs.selectedSegment == 2
+        outlineScroll.isHidden = files || search
+        emptyLabel.isHidden = files || search || !headings.isEmpty
         filesScroll.isHidden = !files
         folderButton.isHidden = !files
+        searchView.isHidden = !search
         if files && rootNode == nil, let folder = Settings.shared.sidebarFolder ?? currentFile?.deletingLastPathComponent() {
             setFolder(folder)
         }
@@ -154,7 +169,7 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSO
         guard new != headings else { return }
         headings = new
         outlineTable.reloadData()
-        emptyLabel.isHidden = tabs.selectedSegment == 1 || !headings.isEmpty
+        emptyLabel.isHidden = tabs.selectedSegment != 0 || !headings.isEmpty
     }
 
     /// Highlights the heading that contains the given source line.

@@ -6,6 +6,12 @@ public func L(_ key: String, _ english: String) -> String {
     Bundle.main.localizedString(forKey: key, value: english, table: nil)
 }
 
+/// Localized string in a specific language (e.g. the document's `lang`), falling back to the UI language.
+public func L(_ key: String, _ english: String, language: String?) -> String {
+    guard let language, let bundle = AppLanguage.bundle(for: language) else { return L(key, english) }
+    return bundle.localizedString(forKey: key, value: english, table: nil)
+}
+
 /// Localized string with `%@` / `%d` placeholders.
 public func LF(_ key: String, _ english: String, _ args: CVarArg...) -> String {
     String(format: L(key, english), locale: Locale.current, arguments: args)
@@ -30,6 +36,20 @@ public enum AppLanguage {
                 UserDefaults.standard.removeObject(forKey: "AppleLanguages")
             }
         }
+    }
+
+    private static var bundles: [String: Bundle] = [:]
+    private static let bundleLock = NSLock()
+
+    /// The `.lproj` bundle for a language code such as "hu" or "en-US".
+    static func bundle(for language: String) -> Bundle? {
+        let code = language.lowercased().split(whereSeparator: { $0 == "-" || $0 == "_" }).first.map(String.init) ?? ""
+        bundleLock.lock()
+        defer { bundleLock.unlock() }
+        if let cached = bundles[code] { return cached }
+        guard let path = Bundle.main.path(forResource: code, ofType: "lproj"), let bundle = Bundle(path: path) else { return nil }
+        bundles[code] = bundle
+        return bundle
     }
 
     /// Language currently used for the UI.

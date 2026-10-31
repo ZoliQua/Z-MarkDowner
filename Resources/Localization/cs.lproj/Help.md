@@ -72,6 +72,40 @@ graph LR
 
 Vložte snímek obrazovky (⌘V) nebo do editoru přetáhněte obrázek: uloží se do složky `images` vedle dokumentu.
 
+## Citace a literatura
+
+Ve front matter uveďte soubor BibTeX (`.bib`) nebo CSL-JSON (nebo nastavte výchozí v Nastavení ▸ Psaní) a citujte pomocí `[@key]`:
+
+```markdown
+---
+bibliography: references.bib
+csl: vancouver        # nebo apa
+---
+
+As shown earlier [@kovacs2020, p. 5; @who2019], … @kovacs2020 found …
+```
+
+Seznam literatury se přidá na konec (nebo tam, kam umístíte `::: {#refs}` … `:::`). **Formát ▸ Citace a odkazy ▸ Vložit citaci…** (⌃⌘C) prohledává seznam literatury a přidává nové zdroje podle **DOI nebo PubMed ID**. Při psaní `@` se nabídnou klíče.
+
+## Číslované obrázky, tabulky a křížové odkazy
+
+| Formát | Výstup |
+|--------|--------|
+| PDF    | obsah s čísly stránek |
+| Word   | skutečný obsah Wordu, popisky |
+
+Table: Exporty {#tbl:exports}
+
+@tbl:exports uvádí výstupní formáty. Obrázky označte pomocí `![Caption](image.png){#fig:name}`, rovnice pomocí `$$ … $$ {#eq:name}`, nadpisy pomocí `# Title {#sec:name}` a odkazujte na ně pomocí `@fig:name`, `@eq:name`, `@sec:name`. `[TOC]` (nebo `toc: true` ve front matter) vloží obsah; `numbersections: true` očísluje nadpisy.
+
+## Revize: změny a komentáře
+
+Sledované změny a komentáře z dokumentů Wordu se importují jako revizní značky – a při exportu se do Wordu vrátí jako sledované změny a komentáře: {++vloženo++}, {--smazáno--}, {~~staré~>nové~~}, {==zvýrazněno==}{>>Komentář<<}. Přijmout nebo odmítnout je můžete v nabídce **Úpravy ▸ Revize**.
+
+## Živé formátování a nástroje pro psaní
+
+**Zobrazení ▸ Živé formátování** (⌥⌘L) skryje značky Markdownu kromě řádku, který právě upravujete. Klepnutím na počet slov ve stavovém řádku zobrazíte statistiku, dobu čtení a cíle psaní. Karta **Hledání** v bočním panelu vyhledává a nahrazuje ve všech souborech Markdown a textových souborech složky (⌥⇧⌘F).
+
 ---
 
 **Export:** Soubor ▸ Exportovat ▸ PDF (⇧⌘E), Word (⇧⌘D), HTML nebo EPUB.

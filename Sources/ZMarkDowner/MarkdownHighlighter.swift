@@ -1,12 +1,29 @@
 import AppKit
 
+extension NSAttributedString.Key {
+    /// Markdown markup that live formatting hides outside the line being edited.
+    static let zmdHidden = NSAttributedString.Key("zmdHidden")
+    /// List bullet drawn as "•" (live formatting).
+    static let zmdBullet = NSAttributedString.Key("zmdBullet")
+    /// Task list box `[ ]` / `[x]` drawn as a checkbox; the value is true when checked.
+    static let zmdCheckbox = NSAttributedString.Key("zmdCheckbox")
+    /// Horizontal rule drawn as a line.
+    static let zmdRule = NSAttributedString.Key("zmdRule")
+    /// Block quote line, drawn with a bar on the left.
+    static let zmdQuote = NSAttributedString.Key("zmdQuote")
+}
+
 /// Applies Markdown syntax highlighting to the editor's text storage.
 final class MarkdownHighlighter {
 
     private(set) var baseFont: NSFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
     private var italicFont: NSFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
+    /// Font for code, tables and formulas.
+    private var monoFont: NSFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
     private var headingFonts: [NSFont] = []
     private(set) var fontSize: CGFloat = 14
+    /// WYSIWYG-like mode: proportional text, large headings, markup marked as hidden.
+    var liveFormatting = false
 
     /// Ranges that must not be spell checked (code, URLs, math, front matter).
     private(set) var noSpellRanges: [NSRange] = []
@@ -20,15 +37,29 @@ final class MarkdownHighlighter {
     func updateFonts() {
         let settings = Settings.shared
         fontSize = settings.editorFontSize
-        baseFont = settings.editorFont()
+        if liveFormatting {
+            // Proportional text: the chosen font when it is proportional, otherwise the system font
+            let chosen = settings.editorFont(size: fontSize + 1)
+            baseFont = chosen.isFixedPitch ? .systemFont(ofSize: fontSize + 1) : chosen
+            monoFont = .monospacedSystemFont(ofSize: fontSize - 1, weight: .regular)
+            let scales: [CGFloat] = [1.9, 1.55, 1.3, 1.12, 1.0, 0.95]
+            headingFonts = scales.map { scale in
+                let size = ((fontSize + 1) * scale).rounded()
+                return NSFontManager.shared.convert(baseFont.withSize(size), toHaveTrait: .boldFontMask)
+            }
+        } else {
+            baseFont = settings.editorFont()
+            monoFont = baseFont
+            let scales: [CGFloat] = [1.45, 1.3, 1.15, 1.05, 1.0, 1.0]
+            headingFonts = scales.map { settings.editorFont(size: (fontSize * $0).rounded(), weight: .bold) }
+        }
         italicFont = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
-        let scales: [CGFloat] = [1.45, 1.3, 1.15, 1.05, 1.0, 1.0]
-        headingFonts = scales.map { settings.editorFont(size: (fontSize * $0).rounded(), weight: .bold) }
     }
 
     var baseAttributes: [NSAttributedString.Key: Any] {
         let para = NSMutableParagraphStyle()
-        para.lineSpacing = fontSize * 0.35
+        para.lineSpacing = fontSize * (liveFormatting ? 0.45 : 0.35)
+        if liveFormatting { para.paragraphSpacing = fontSize * 0.25 }
         return [.font: baseFont, .foregroundColor: NSColor.textColor, .paragraphStyle: para]
     }
 
@@ -38,7 +69,7 @@ final class MarkdownHighlighter {
         try! NSRegularExpression(pattern: pattern, options: options)
     }
 
-    private static let frontMatter = re(#"\A---[ \t]*\n(?:[\s\S]*?\n)?(?:---|\.\.\.)[ \t]*$"#, [])
+    private static let frontMatter = re(#"\A---[ \t]*\n(?:[\s\S]*?\n)?(?:---|\.\.\.)[ \t]*(?=\n|\z)"#, [])
     private static let fence = re(#"^ {0,3}(```|~~~)[^\n]*\n[\s\S]*?(?:^ {0,3}\1[ \t]*$|\z)"#)
     private static let mathBlock = re(#"^ {0,3}\$\$[\s\S]*?\$\$[ \t]*$"#)
     private static let heading = re(#"^ {0,3}(#{1,6})[ \t]+.*$"#)
@@ -57,6 +88,19 @@ final class MarkdownHighlighter {
     private static let footnote = re(#"\[\^[^\]\s]+\]:?"#)
     private static let autolink = re(#"<[a-zA-Z][a-zA-Z0-9+.\-]*:[^>\s]+>|\bhttps?://[^\s<>()]+|\bwww\.[^\s<>()]+"#)
     private static let tablePipe = re(#"^\s*\|.*\|\s*$"#)
+    private static let citation = re(#"\[[^\[\]\n]*-?@[A-Za-z0-9_][^\[\]\n]*\](?![(\[])|(?<![\w.@/\\-])@[A-Za-z0-9_][\w:.#$%&\-+?~/]*[\w]"#)
+    private static let attributeBlock = re(#"\{[#.-][^{}\n]*\}[ \t]*$"#)
+    private static let criticInsert = re(#"\{\+\+([\s\S]+?)\+\+\}"#)
+    private static let criticDelete = re(#"\{--([\s\S]+?)--\}"#)
+    private static let criticHighlight = re(#"\{==([\s\S]+?)==\}"#)
+    private static let criticComment = re(#"\{>>([\s\S]*?)<<\}"#)
+    private static let criticSubstitute = re(#"\{~~([\s\S]+?)~>([\s\S]*?)~~\}"#)
+    private static let taskBox = re(#"^[ \t]*[-*+][ \t]+(\[[ xX]\])(?=[ \t])"#)
+    private static let bulletMarker = re(#"^[ \t]*([-*+])[ \t]+"#)
+    private static let quoteMarker = re(#"^ {0,3}(>[ \t]?)+"#)
+    private static let headingMarker = re(#"^ {0,3}(#{1,6}[ \t]+)"#)
+    private static let footnoteRef = re(#"\[\^([^\]\s]+)\](?!:)"#)
+    private static let autolinkBrackets = re(#"<([a-zA-Z][a-zA-Z0-9+.\-]*:[^>\s]+)>"#)
 
     // MARK: Highlighting
 
@@ -143,20 +187,31 @@ final class MarkdownHighlighter {
             let isMath = text.substring(with: NSRange(location: r.location, length: min(r.length, 8)))
                 .trimmingCharacters(in: .whitespaces).hasPrefix("$$")
             if isFrontMatter {
-                storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: clipped)
+                storage.addAttributes([.foregroundColor: NSColor.secondaryLabelColor, .font: monoFont], range: clipped)
             } else if isMath {
-                storage.addAttributes([.foregroundColor: NSColor.systemPurple, .backgroundColor: codeBackground], range: clipped)
+                storage.addAttributes([.foregroundColor: NSColor.systemPurple, .backgroundColor: codeBackground, .font: monoFont], range: clipped)
             } else {
-                storage.addAttributes([.foregroundColor: NSColor.systemBrown, .backgroundColor: codeBackground], range: clipped)
+                storage.addAttributes([.foregroundColor: NSColor.systemBrown, .backgroundColor: codeBackground, .font: monoFont], range: clipped)
             }
             protected.append(r)
             noSpell.append(r)
+        }
+
+        func hide(_ range: NSRange) {
+            guard liveFormatting, range.location != NSNotFound, range.length > 0 else { return }
+            storage.addAttribute(.zmdHidden, value: true, range: range)
         }
 
         for m in matches(Self.heading) {
             let level = m.range(at: 1).length
             storage.addAttributes([.font: headingFonts[level - 1], .foregroundColor: NSColor.labelColor], range: m.range)
             storage.addAttribute(.foregroundColor, value: accent, range: m.range(at: 1))
+            if liveFormatting, let marker = Self.headingMarker.firstMatch(in: string, range: m.range) {
+                hide(marker.range(at: 1))
+                let para = (baseAttributes[.paragraphStyle] as! NSParagraphStyle).mutableCopy() as! NSMutableParagraphStyle
+                para.paragraphSpacingBefore = fontSize * (level <= 2 ? 0.9 : 0.5)
+                storage.addAttribute(.paragraphStyle, value: para, range: m.range)
+            }
         }
         for m in matches(Self.setext) {
             let level = text.substring(with: m.range(at: 1)).hasPrefix("=") ? 0 : 1
@@ -165,12 +220,34 @@ final class MarkdownHighlighter {
         }
         for m in matches(Self.quote) {
             storage.addAttributes([.foregroundColor: NSColor.secondaryLabelColor, .font: italicFont], range: m.range)
+            if liveFormatting, let marker = Self.quoteMarker.firstMatch(in: string, range: m.range) {
+                hide(marker.range)
+                let depth = text.substring(with: marker.range).filter { $0 == ">" }.count
+                let para = (baseAttributes[.paragraphStyle] as! NSParagraphStyle).mutableCopy() as! NSMutableParagraphStyle
+                para.firstLineHeadIndent = CGFloat(depth) * 16
+                para.headIndent = CGFloat(depth) * 16
+                storage.addAttributes([.zmdQuote: depth, .paragraphStyle: para], range: m.range)
+            }
         }
         for m in matches(Self.hr) {
             storage.addAttribute(.foregroundColor, value: markupColor, range: m.range)
+            if liveFormatting { storage.addAttribute(.zmdRule, value: true, range: m.range) }
         }
         for m in matches(Self.listMarker) {
             storage.addAttribute(.foregroundColor, value: accent, range: m.range)
+        }
+        if liveFormatting {
+            for m in matches(Self.bulletMarker) {
+                storage.addAttribute(.zmdBullet, value: true, range: m.range(at: 1))
+            }
+            for m in matches(Self.taskBox) {
+                let box = m.range(at: 1)
+                let checked = text.substring(with: box).lowercased() == "[x]"
+                storage.addAttribute(.zmdCheckbox, value: checked, range: box)
+                // The bullet in front of a checkbox is not drawn
+                storage.removeAttribute(.zmdBullet, range: NSRange(location: m.range.location, length: box.location - m.range.location))
+                hide(NSRange(location: m.range.location, length: box.location - m.range.location))
+            }
         }
         for m in matches(Self.tablePipe) {
             let line = text.substring(with: m.range) as NSString
@@ -181,6 +258,7 @@ final class MarkdownHighlighter {
                     storage.addAttribute(.foregroundColor, value: markupColor, range: NSRange(location: m.range.location + idx, length: 1))
                 }
             }
+            if liveFormatting { storage.addAttribute(.font, value: monoFont, range: m.range) }
         }
 
         // Inline styles
@@ -191,9 +269,12 @@ final class MarkdownHighlighter {
                     storage.addAttribute(.font, value: transform((value as? NSFont) ?? baseFont), range: range)
                 }
                 let marker = m.range(at: 1)
-                storage.addAttribute(.foregroundColor, value: markupColor, range: NSRange(location: m.range.location, length: marker.length))
-                storage.addAttribute(.foregroundColor, value: markupColor,
-                                     range: NSRange(location: NSMaxRange(m.range) - marker.length, length: marker.length))
+                let open = NSRange(location: m.range.location, length: marker.length)
+                let close = NSRange(location: NSMaxRange(m.range) - marker.length, length: marker.length)
+                storage.addAttribute(.foregroundColor, value: markupColor, range: open)
+                storage.addAttribute(.foregroundColor, value: markupColor, range: close)
+                hide(open)
+                hide(close)
             }
         }
         applyTrait(Self.boldItalic) { fm.convert(fm.convert($0, toHaveTrait: .boldFontMask), toHaveTrait: .italicFontMask) }
@@ -203,9 +284,20 @@ final class MarkdownHighlighter {
         for m in matches(Self.strike) {
             storage.addAttributes([.strikethroughStyle: NSUnderlineStyle.single.rawValue,
                                    .foregroundColor: NSColor.secondaryLabelColor], range: m.range)
+            hide(NSRange(location: m.range.location, length: 2))
+            hide(NSRange(location: NSMaxRange(m.range) - 2, length: 2))
         }
         for m in matches(Self.link) {
             storage.addAttribute(.foregroundColor, value: NSColor.linkColor, range: m.range)
+            // Live formatting shows only the link text: "[" and "](url)" are hidden
+            let source = text.substring(with: m.range) as NSString
+            let close = source.range(of: "](")
+            if liveFormatting, !source.hasPrefix("!"), close.location != NSNotFound, close.location > 1 {
+                hide(NSRange(location: m.range.location, length: 1))
+                hide(NSRange(location: m.range.location + close.location, length: m.range.length - close.location))
+                storage.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue,
+                                     range: NSRange(location: m.range.location + 1, length: close.location - 1))
+            }
         }
         for m in matches(Self.linkTarget) {
             noSpell.append(m.range(at: 1))
@@ -214,17 +306,72 @@ final class MarkdownHighlighter {
             storage.addAttribute(.foregroundColor, value: NSColor.linkColor, range: m.range)
             noSpell.append(m.range)
         }
+        if liveFormatting {
+            for m in matches(Self.autolinkBrackets) {
+                hide(NSRange(location: m.range.location, length: 1))
+                hide(NSRange(location: NSMaxRange(m.range) - 1, length: 1))
+            }
+        }
         for m in matches(Self.footnote) {
             storage.addAttribute(.foregroundColor, value: NSColor.systemTeal, range: m.range)
             noSpell.append(m.range)
         }
+        if liveFormatting {
+            for m in matches(Self.footnoteRef) {
+                hide(NSRange(location: m.range.location, length: 2))
+                hide(NSRange(location: NSMaxRange(m.range) - 1, length: 1))
+                storage.addAttributes([.font: baseFont.withSize(fontSize * 0.75), .baselineOffset: fontSize * 0.35],
+                                      range: m.range(at: 1))
+            }
+        }
+        for m in matches(Self.citation) {
+            storage.addAttribute(.foregroundColor, value: NSColor.systemTeal, range: m.range)
+            noSpell.append(m.range)
+        }
+        for m in matches(Self.attributeBlock) {
+            storage.addAttribute(.foregroundColor, value: markupColor, range: m.range)
+            noSpell.append(m.range)
+        }
+
+        // CriticMarkup (review marks)
+        let insertColor = NSColor.systemGreen
+        let deleteColor = NSColor.systemRed
+        func critic(_ regex: NSRegularExpression, _ attributes: [NSAttributedString.Key: Any], content: Int = 1) {
+            for m in matches(regex) {
+                storage.addAttributes(attributes, range: m.range(at: content))
+                let open = NSRange(location: m.range.location, length: 3)
+                let close = NSRange(location: NSMaxRange(m.range) - 3, length: 3)
+                storage.addAttribute(.foregroundColor, value: markupColor, range: open)
+                storage.addAttribute(.foregroundColor, value: markupColor, range: close)
+                hide(open)
+                hide(close)
+            }
+        }
+        critic(Self.criticInsert, [.foregroundColor: insertColor, .underlineStyle: NSUnderlineStyle.single.rawValue,
+                                   .backgroundColor: insertColor.withAlphaComponent(0.12)])
+        critic(Self.criticDelete, [.foregroundColor: deleteColor, .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                                   .backgroundColor: deleteColor.withAlphaComponent(0.1)])
+        critic(Self.criticHighlight, [.backgroundColor: NSColor.systemYellow.withAlphaComponent(0.35)])
+        critic(Self.criticComment, [.foregroundColor: NSColor.systemBlue, .backgroundColor: NSColor.systemBlue.withAlphaComponent(0.1),
+                                    .font: baseFont.withSize(fontSize * 0.85)])
+        for m in matches(Self.criticSubstitute) {
+            storage.addAttributes([.foregroundColor: deleteColor, .strikethroughStyle: NSUnderlineStyle.single.rawValue], range: m.range(at: 1))
+            storage.addAttributes([.foregroundColor: insertColor, .underlineStyle: NSUnderlineStyle.single.rawValue], range: m.range(at: 2))
+            hide(NSRange(location: m.range.location, length: 3))
+            hide(NSRange(location: NSMaxRange(m.range(at: 1)), length: 2))
+            hide(NSRange(location: NSMaxRange(m.range) - 3, length: 3))
+        }
+
         for m in matches(Self.inlineMath) {
-            storage.addAttributes([.foregroundColor: NSColor.systemPurple, .font: baseFont], range: m.range)
+            storage.addAttributes([.foregroundColor: NSColor.systemPurple, .font: monoFont], range: m.range)
             noSpell.append(m.range)
         }
         for m in matches(Self.inlineCode) {
             storage.addAttributes([.foregroundColor: NSColor.systemPink, .backgroundColor: codeBackground,
-                                   .font: baseFont], range: m.range)
+                                   .font: monoFont], range: m.range)
+            let ticks = m.range(at: 1).length
+            hide(NSRange(location: m.range.location, length: ticks))
+            hide(NSRange(location: NSMaxRange(m.range) - ticks, length: ticks))
             noSpell.append(m.range)
         }
 

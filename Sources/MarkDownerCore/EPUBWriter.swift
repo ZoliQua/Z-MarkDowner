@@ -4,7 +4,7 @@ import Foundation
 public enum EPUBWriter {
 
     public static func makeEPUB(markdown: String, options: ExportOptions) -> Data {
-        let doc = MDDocument(markdown: markdown)
+        let doc = options.prepare(markdown)
         let title = doc.title ?? options.title
         let language = doc.frontMatter["lang"] ?? doc.frontMatter["language"]
             ?? (options.language.isEmpty ? "en" : options.language)
@@ -66,10 +66,13 @@ public enum EPUBWriter {
         // Navigation from headings (ids generated the same way as by the HTML renderer)
         var used: [String: Int] = [:]
         var navItems: [(Int, String, String)] = []
-        for item in doc.outline {
-            var id = HTMLRenderer.slug(item.text)
-            if let n = used[id] { used[id] = n + 1; id += "-\(n)" } else { used[id] = 1 }
-            if item.level <= 3 { navItems.append((item.level, item.text, id)) }
+        for block in doc.blocks {
+            guard case .heading(let level, let content, let explicitID) = block else { continue }
+            var id = explicitID ?? HTMLRenderer.slug(content.plainText)
+            if explicitID == nil {
+                if let n = used[id] { used[id] = n + 1; id += "-\(n)" } else { used[id] = 1 }
+            }
+            if level <= 3 { navItems.append((level, content.plainText, id)) }
         }
         if navItems.isEmpty { navItems = [(1, title, "")] }
         let nav = """

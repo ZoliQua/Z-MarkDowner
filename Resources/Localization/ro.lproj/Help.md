@@ -72,6 +72,40 @@ graph LR
 
 Lipiți o captură de ecran (⌘V) sau trageți o imagine în editor: aceasta este salvată într-un dosar `images` lângă document.
 
+## Citări și referințe
+
+Indicați un fișier BibTeX (`.bib`) sau CSL-JSON în front matter (sau setați unul implicit în Configurări ▸ Scriere), apoi citați cu `[@key]`:
+
+```markdown
+---
+bibliography: references.bib
+csl: vancouver        # sau apa
+---
+
+As shown earlier [@kovacs2020, p. 5; @who2019], … @kovacs2020 found …
+```
+
+Bibliografia este adăugată la sfârșit (sau acolo unde plasați `::: {#refs}` … `:::`). **Format ▸ Citări și referințe ▸ Inserează citare…** (⌃⌘C) caută în bibliografie și adaugă referințe noi după **DOI sau ID PubMed**. Tastarea `@` propune cheile.
+
+## Figuri, tabele numerotate și referințe încrucișate
+
+| Format | Rezultat |
+|--------|----------|
+| PDF    | cuprins cu numere de pagină |
+| Word   | cuprins Word real, legende |
+
+Table: Exporturi {#tbl:exports}
+
+@tbl:exports enumeră formatele de ieșire. Etichetați figurile cu `![Caption](image.png){#fig:name}`, ecuațiile cu `$$ … $$ {#eq:name}`, titlurile cu `# Title {#sec:name}` și faceți trimitere la ele cu `@fig:name`, `@eq:name`, `@sec:name`. `[TOC]` (sau `toc: true` în front matter) inserează un cuprins; `numbersections: true` numerotează titlurile.
+
+## Revizuire: modificări și comentarii
+
+Modificările urmărite și comentariile din documentele Word sunt importate ca marcaje de revizuire – și exportate înapoi în Word ca modificări urmărite și comentarii: {++inserat++}, {--șters--}, {~~vechi~>nou~~}, {==evidențiat==}{>>Un comentariu<<}. Folosiți **Editare ▸ Revizuire** pentru a le accepta sau respinge.
+
+## Formatare live și instrumente de scriere
+
+**Afișare ▸ Formatare live** (⌥⌘L) ascunde marcajele Markdown, cu excepția rândului pe care îl editați. Faceți clic pe numărul de cuvinte din bara de stare pentru statistici, timp de citire și obiective de scriere. Fila **Căutare** din bara laterală caută și înlocuiește în toate fișierele Markdown și text dintr-un dosar (⌥⇧⌘F).
+
 ---
 
 **Export:** Fișier ▸ Exportă ▸ PDF (⇧⌘E), Word (⇧⌘D), HTML sau EPUB.

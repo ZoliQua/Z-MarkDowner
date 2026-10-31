@@ -72,6 +72,40 @@ graph LR
 
 Cole uma captura de tela (⌘V) ou arraste uma imagem para o editor: ela é salva em uma pasta `images` ao lado do documento.
 
+## Citações e referências
+
+Indique um arquivo BibTeX (`.bib`) ou CSL-JSON no front matter (ou defina um padrão em Ajustes ▸ Escrita) e cite com `[@key]`:
+
+```markdown
+---
+bibliography: references.bib
+csl: vancouver        # ou apa
+---
+
+As shown earlier [@kovacs2020, p. 5; @who2019], … @kovacs2020 found …
+```
+
+A lista de referências é adicionada no final (ou onde você colocar `::: {#refs}` … `:::`). **Formatar ▸ Citações e Referências ▸ Inserir Citação…** (⌃⌘C) busca na bibliografia e adiciona novas referências por **DOI ou ID do PubMed**. Ao digitar `@`, as chaves são sugeridas.
+
+## Figuras, tabelas numeradas e referências cruzadas
+
+| Formato | Resultado |
+|---------|-----------|
+| PDF     | sumário com números de página |
+| Word    | sumário real do Word, legendas |
+
+Table: Exportações {#tbl:exports}
+
+@tbl:exports lista os formatos de saída. Rotule figuras com `![Caption](image.png){#fig:name}`, equações com `$$ … $$ {#eq:name}`, cabeçalhos com `# Title {#sec:name}` e faça referência a eles com `@fig:name`, `@eq:name`, `@sec:name`. `[TOC]` (ou `toc: true` no front matter) insere um sumário; `numbersections: true` numera os cabeçalhos.
+
+## Revisão: alterações e comentários
+
+As alterações controladas e os comentários de documentos do Word são importados como marcas de revisão — e exportados de volta para o Word como alterações controladas e comentários: {++inserido++}, {--apagado--}, {~~antigo~>novo~~}, {==destacado==}{>>Um comentário<<}. Use **Editar ▸ Revisão** para aceitá-los ou rejeitá-los.
+
+## Formatação ao vivo e ferramentas de escrita
+
+**Visualizar ▸ Formatação ao Vivo** (⌥⌘L) oculta as marcações Markdown, exceto na linha que você está editando. Clique na contagem de palavras na barra de status para ver estatísticas, tempo de leitura e metas de escrita. A aba **Buscar** da barra lateral busca e substitui em todos os arquivos Markdown e de texto de uma pasta (⌥⇧⌘F).
+
 ---
 
 **Exportar:** Arquivo ▸ Exportar ▸ PDF (⇧⌘E), Word (⇧⌘D), HTML ou EPUB.
