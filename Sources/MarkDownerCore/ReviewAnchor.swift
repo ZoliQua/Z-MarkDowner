@@ -491,7 +491,55 @@ public enum ReviewAnchor {
             if !inWords { return nil }
         }
         guard q.count >= 3 else { return nil }
-        return fuzzy(quote: NormalizedText.tokenize(Array(variants.last!.utf16)).map(\.text), before: b, after: a, in: normalized)
+        if let r = fuzzy(quote: NormalizedText.tokenize(Array(variants.last!.utf16)).map(\.text), before: b, after: a, in: normalized) {
+            return r
+        }
+        guard q.range(of: #"[^ ]{20,}"#, options: .regularExpression) != nil else { return nil }
+        for variant in variants {
+            if let r = despaced(variant, before: b, after: a, in: normalized) { return r }
+        }
+        return nil
+    }
+
+    /// Last resort for quotes from PDFs whose text layer has no spaces ("wepresentsetdiagramtool"):
+    /// the quote and the source compared with all spaces removed. Accepts a unique occurrence, or the
+    /// one whose surroundings alone match at least half of a context.
+    private static func despaced(_ quote: String, before: String, after: String, in normalized: NormalizedText) -> NSRange? {
+        var units: [UInt16] = []
+        var index: [Int] = []
+        units.reserveCapacity(normalized.units.count)
+        index.reserveCapacity(normalized.units.count)
+        for (i, unit) in normalized.units.enumerated() where unit != 0x20 {
+            units.append(unit)
+            index.append(i)
+        }
+        let strip = { (s: String) in Array(s.utf16.filter { $0 != 0x20 }) }
+        let needle = String(decoding: strip(quote), as: UTF16.self)
+        let hay = String(decoding: units, as: UTF16.self) as NSString
+        var found: [NSRange] = []
+        var from = 0
+        while from < hay.length {
+            let r = hay.range(of: needle, options: .literal, range: NSRange(location: from, length: hay.length - from))
+            if r.location == NSNotFound { break }
+            found.append(r)
+            from = r.location + 1
+        }
+        var chosen = found.count == 1 ? found.first : nil
+        if found.count > 1 {
+            let beforeUnits = strip(before), afterUnits = strip(after)
+            let scores = found.map { r -> Int in
+                let back = zip(beforeUnits.reversed(), units[..<r.location].reversed()).prefix { $0 == $1 }.count
+                let ahead = zip(afterUnits, units[NSMaxRange(r)...]).prefix { $0 == $1 }.count
+                let enough = (!beforeUnits.isEmpty && back * 2 >= beforeUnits.count) || (!afterUnits.isEmpty && ahead * 2 >= afterUnits.count)
+                return enough ? back + ahead : 0
+            }
+            if let best = scores.max(), best > 0, scores.filter({ $0 == best }).count == 1 {
+                chosen = found[scores.firstIndex(of: best)!]
+            }
+        }
+        guard let r = chosen else { return nil }
+        let start = index[r.location]
+        return normalized.sourceRange(NSRange(location: start, length: index[NSMaxRange(r) - 1] + 1 - start))
     }
 
     private static func fold(_ s: String) -> String {

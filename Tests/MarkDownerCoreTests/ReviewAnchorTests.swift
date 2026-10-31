@@ -198,4 +198,28 @@ final class ReviewAnchorTests: XCTestCase {
         let r = ReviewAnchor.locate(quote: "data", before: "We store the meta", after: " in a separate", in: n)
         XCTAssertEqual(r, (text as NSString).range(of: "data"))
     }
+    func testGluedQuoteFromSpacelessPDFAnchors() {
+        let text = "Existing tools fall short.\nWe present \\textbf{Set Diagram Tool}, a small program that compares\nlists of genes quickly. It runs offline."
+        let n = NormalizedText(source: text, format: .latex)
+        let quote = "WepresentSetDiagramTool,asmallprogramthatcompareslistsofgenesquickly."
+        XCTAssertEqual(source(text, ReviewAnchor.locate(quote: quote, before: "", after: "", in: n)),
+                       "We present \\textbf{Set Diagram Tool}, a small program that compares\nlists of genes quickly.")
+    }
+
+    func testRepeatedGluedQuoteIsNilUnlessContextDecides() {
+        let sentence = "The interactive diagram updates instantly."
+        let text = "Intro. \(sentence) Middle part. \(sentence) End."
+        let n = NormalizedText(source: text, format: .plain)
+        let quote = "Theinteractivediagramupdatesinstantly."
+        XCTAssertNil(ReviewAnchor.locate(quote: quote, before: "", after: "", in: n))
+        let r = ReviewAnchor.locate(quote: quote, before: "Middlepart.", after: "", in: n)
+        XCTAssertEqual(r?.location, (text as NSString).range(of: "Middle part. ").upperBound)
+    }
+
+    func testShortGluedQuoteDoesNotUseDespacedPath() {
+        let text = "We present a small program."
+        let n = NormalizedText(source: text, format: .plain)
+        XCTAssertNil(ReviewAnchor.locate(quote: "asmallprogram", before: "", after: "", in: n))
+        XCTAssertNotNil(ReviewAnchor.locate(quote: "wepresentasmallprogram.", before: "", after: "", in: n))
+    }
 }
