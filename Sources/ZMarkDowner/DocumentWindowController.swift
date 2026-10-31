@@ -745,6 +745,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         case #selector(exportPDF(_:)), #selector(exportDOCX(_:)), #selector(exportHTML(_:)), #selector(exportEPUB(_:)),
              #selector(EditorTextView.copyAsRichText(_:)):
             return !isLatex
+        case #selector(compareWithSaved(_:)), #selector(compareWithVersion(_:)):
+            return markdownDocument?.fileURL != nil
+        case #selector(compareWithClipboard(_:)):
+            return NSPasteboard.general.string(forType: .string) != nil
         case #selector(exportResponseLetter(_:)):
             return review.session != nil
         case #selector(showComments(_:)):
@@ -829,6 +833,76 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
                 }
             }
         }
+    }
+
+    // MARK: - Compare
+
+    private var compareTitle: String { markdownDocument?.displayName ?? L("document.untitled", "Document") }
+
+    /// Opens a comparison window with the editor text as one side (review marks are off for LaTeX).
+    private func showDiff(oldTitle: String, old: String, newTitle: String, new: String) {
+        DiffWindowController.show(oldTitle: oldTitle, old: old, newTitle: newTitle, new: new,
+                                  allowsReviewMarks: !isLatex, baseURL: markdownDocument?.baseDirectory)
+    }
+
+    /// Compares the saved file on disk (old) with the editor text (new).
+    @objc func compareWithSaved(_ sender: Any?) {
+        guard let url = markdownDocument?.fileURL else { return }
+        commitEditing()
+        do {
+            let saved = DocumentImporter.decodeText(try Data(contentsOf: url))
+            showDiff(oldTitle: LF("compare.saved", "%@ (saved)", compareTitle), old: saved, newTitle: compareTitle, new: editor.string)
+        } catch {
+            presentCompareError(error)
+        }
+    }
+
+    /// Lets the user pick one of the versions macOS keeps of the file and compares it with the editor text.
+    @objc func compareWithVersion(_ sender: Any?) {
+        guard let window, let url = markdownDocument?.fileURL else { return }
+        commitEditing()
+        let versions = (NSFileVersion.otherVersionsOfItem(at: url) ?? [])
+            .sorted { ($0.modificationDate ?? .distantPast) > ($1.modificationDate ?? .distantPast) }
+        let alert = NSAlert()
+        guard !versions.isEmpty else {
+            alert.messageText = L("compare.noVersions", "No earlier versions of this document are available.")
+            alert.beginSheetModal(for: window, completionHandler: nil)
+            return
+        }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 280, height: 26), pullsDown: false)
+        popup.addItems(withTitles: versions.enumerated().map { index, version in
+            "\(index + 1). " + (version.modificationDate.map(formatter.string) ?? version.localizedName ?? "")
+        })
+        alert.messageText = L("compare.chooseVersion", "Compare with an earlier version")
+        alert.accessoryView = popup
+        alert.addButton(withTitle: L("compare.compare", "Compare"))
+        alert.addButton(withTitle: L("button.cancel", "Cancel"))
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            let version = versions[popup.indexOfSelectedItem]
+            do {
+                let old = DocumentImporter.decodeText(try Data(contentsOf: version.url))
+                let date = version.modificationDate.map(formatter.string) ?? ""
+                self.showDiff(oldTitle: "\(self.compareTitle) (\(date))", old: old, newTitle: self.compareTitle, new: self.editor.string)
+            } catch {
+                self.presentCompareError(error)
+            }
+        }
+    }
+
+    /// Compares the editor text (old) with the text on the clipboard (new).
+    @objc func compareWithClipboard(_ sender: Any?) {
+        guard let clipboard = NSPasteboard.general.string(forType: .string) else { return }
+        commitEditing()
+        showDiff(oldTitle: compareTitle, old: editor.string, newTitle: L("compare.clipboard", "Clipboard"), new: clipboard)
+    }
+
+    private func presentCompareError(_ error: Error) {
+        guard let window else { return }
+        NSAlert(error: error).beginSheetModal(for: window, completionHandler: nil)
     }
 
     // MARK: - Printing

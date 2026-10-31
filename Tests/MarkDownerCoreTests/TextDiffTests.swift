@@ -48,6 +48,33 @@ final class TextDiffTests: XCTestCase {
         XCTAssertEqual(r.insertedWords + r.deletedWords, 0)
     }
 
+    func testEqualRowsKeepOldTextUnderIgnoreOptions() {
+        let options = DiffOptions(ignoreWhitespace: true, ignoreCase: true)
+        let r = TextDiff.compare("Hello  World\nsame", "hello world\nsame", options: options)
+        XCTAssertEqual(r.rows.count, 2)
+        XCTAssertEqual(r.rows[0].old, [DiffSegment(kind: .equal, text: "Hello  World")])
+        XCTAssertEqual(r.rows[0].new, [DiffSegment(kind: .equal, text: "hello world")])
+        let changed = TextDiff.compare("Alpha  Beta\nx\n", "alpha beta gamma\ny\n", options: options)
+        XCTAssertEqual(changed.rows[0].old?.map(\.text).joined(), "Alpha  Beta")
+        XCTAssertEqual(changed.rows[0].new?.map(\.text).joined(), "alpha beta gamma")
+    }
+
+    func testRowsPairSimilarLinesInChangedBlocks() {
+        let old = "Intro\nThe values were averaged.\nThis line was removed.\nAll samples were stored cold.\nEnd"
+        let new = "Intro\nThe values were averaged twice.\nAll samples were stored warm.\nA new line.\nEnd"
+        let r = TextDiff.compare(old, new)
+        let pairs = r.rows.map { [$0.oldLine, $0.newLine] }
+        XCTAssertEqual(pairs, [[0, 0], [1, 1], [2, nil], [3, 2], [nil, 3], [4, 4]])
+        XCTAssertEqual(r.rows[3].new?.map(\.text).joined(), "All samples were stored warm.")
+    }
+
+    func testProseTextIgnoresFormatting() {
+        let md = "# Title\n\nSome **bold** and [link](http://x)\nwrapped.\n\n- item *one*\n\n```\ncode line\n```\n"
+        XCTAssertEqual(TextStatistics.proseText(of: md), "Title\nSome bold and link wrapped.\nitem one\ncode line\n")
+        let r = TextDiff.compare(TextStatistics.proseText(of: "A *quick* fox"), TextStatistics.proseText(of: "A **quick** fox"))
+        XCTAssertEqual(r.insertedWords + r.deletedWords, 0)
+    }
+
     func testIdenticalAndEmpty() {
         let ins = TextDiff.compare("", "abc")
         XCTAssertEqual(ins.segments, [DiffSegment(kind: .insert, text: "abc")])

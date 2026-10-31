@@ -72,6 +72,7 @@ final class SelfTest {
         await scholarlyAndWriting()
         await latexSources()
         await reviewFromPDF()
+        await diffWindow()
         await finish()
     }
 
@@ -702,6 +703,16 @@ final class SelfTest {
             let graphicFile = graphic.map { dir.appendingPathComponent(String($0.split(separator: "{").last!.dropLast())) }
             check(graphicFile.map { FileManager.default.fileExists(atPath: $0.path) } ?? false,
                   "LaTeX: pasted image stored and inserted as \\includegraphics: \(graphic ?? "-")")
+            check(enabled(#selector(DocumentWindowController.compareWithSaved(_:))), "LaTeX: Compare With ▸ Last Saved Version enabled")
+            wc.compareWithSaved(nil)
+            if let diff = DiffWindowController.openControllers.last {
+                _ = await waitFor(5) { diff.result != nil }
+                check(!diff.allowsReviewMarks && diff.result != nil,
+                      "LaTeX: compare with saved works (\(diff.result?.insertedWords ?? -1) words inserted), Open as Review Marks disabled (\(diff.allowsReviewMarks))")
+                diff.close()
+            } else {
+                check(false, "LaTeX: compare with saved opened no window")
+            }
             doc.updateChangeCount(.changeCleared)
             doc.close()
         } catch {
@@ -997,6 +1008,129 @@ final class SelfTest {
     // MARK: Helpers
 
     /// Full screen needs an awake, unlocked display.
+    // MARK: 6. Diff window
+
+    /// Compares texts side by side and inline, navigates changes, writes review marks and a tracked-changes
+    /// Word file, compares a DOCX with a PDF of the same Markdown, and diffs 200 000 characters off the main thread.
+    private func diffWindow() async {
+        let dir = output.appendingPathComponent("diff", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let diff = DiffWindowController(oldTitle: "A", old: "The quick brown fox", newTitle: "B", new: "The slow brown dog")
+        diff.ignoreWhitespace = false; diff.ignoreCase = false; diff.ignoreFormatting = false
+        diff.layout = .sideBySide
+        diff.showWindow(nil)
+        await diff.recompute()
+        guard let window = diff.window, let result = diff.result else { check(false, "Diff: no result"); return }
+        activeWindow = window
+        check(window.title == "Compare: A ↔ B", "Diff: window title \(window.title)")
+        check(result.insertedWords == 2 && result.deletedWords == 2, "Diff: 2 words inserted, 2 deleted (\(result.insertedWords), \(result.deletedWords))")
+        check(diff.oldTextView.string.contains("The quick brown fox") && diff.newTextView.string.contains("The slow brown dog")
+              && diff.oldTextView.enclosingScrollView?.isHidden == false,
+              "Diff: side by side shows both versions")
+        diff.layout = .inline
+        let inline = diff.inlineTextView.string as NSString
+        let quick = inline.range(of: "quick")
+        let strike = quick.location == NSNotFound ? nil
+            : diff.inlineTextView.textStorage?.attribute(.strikethroughStyle, at: quick.location, effectiveRange: nil) as? Int
+        check(strike == NSUnderlineStyle.single.rawValue && diff.inlineTextView.enclosingScrollView?.isHidden == false,
+              "Diff: inline view strikes through \"quick\"")
+        let reviewDoc = diff.openAsReviewMarks()
+        check(reviewDoc.text == "The {--quick--}{++slow++} brown {--fox--}{++dog++}", "Diff: review marks: \(reviewDoc.text)")
+        reviewDoc.updateChangeCount(.changeCleared)
+        reviewDoc.close()
+        let wordURL = dir.appendingPathComponent("changes.docx")
+        do {
+            try diff.exportWord(to: wordURL)
+            let back = try DocumentImporter.markdown(fromFileAt: wordURL)
+            check(back.contains("{--quick--}") && back.contains("{++slow++}"), "Diff: Word export has tracked changes: \(back.prefix(80))")
+        } catch {
+            check(false, "Diff: Word export: \(error.localizedDescription)")
+        }
+        window.makeKeyAndOrderFront(nil)
+        let down = String(Character(UnicodeScalar(UInt32(NSDownArrowFunctionKey))!))
+        let up = String(Character(UnicodeScalar(UInt32(NSUpArrowFunctionKey))!))
+        func key(_ chars: String) -> NSEvent? {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .numericPad, .function], timestamp: 0,
+                             windowNumber: window.windowNumber, context: nil, characters: chars, charactersIgnoringModifiers: chars,
+                             isARepeat: false, keyCode: chars == down ? 125 : 126)
+        }
+        _ = key(down).map(window.performKeyEquivalent)
+        _ = key(down).map(window.performKeyEquivalent)
+        let afterDown = diff.currentChange
+        _ = key(up).map(window.performKeyEquivalent)
+        check(afterDown == 1 && diff.currentChange == 0 && diff.inlineTextView.selectedRange().length > 0,
+              "Diff: ⌘↓ / ⌘↑ move between changes (\(String(describing: afterDown)), \(String(describing: diff.currentChange)))")
+        diff.close()
+
+        // Screenshots with wrapped, inserted and deleted lines
+        let oldSample = "# Results\n\nThe experiment was repeated three times with the same settings, and the values were averaged before the statistical analysis was performed on the whole data set.\n\nThis paragraph was removed.\n\nAll samples were stored at room temperature.\nThe end."
+        let newSample = "# Results\n\nThe experiment was repeated five times with identical settings, and the values were averaged before the analysis.\n\nAll samples were stored at 4 °C.\nA new line was added here.\nThe end."
+        let sample = DiffWindowController(oldTitle: "draft-v1.md", old: oldSample, newTitle: "draft-v2.md", new: newSample)
+        sample.ignoreWhitespace = false; sample.ignoreCase = false; sample.ignoreFormatting = false
+        sample.layout = .sideBySide
+        sample.showWindow(nil)
+        sample.window?.setContentSize(NSSize(width: 1000, height: 460))
+        await sample.recompute()
+        sample.selectNextChange()
+        if let w = sample.window {
+            await wait(0.4)
+            await snapshot(w, name: "diff-side-by-side")
+            let oldRows = (sample.oldTextView.layoutManager?.usedRect(for: sample.oldTextView.textContainer!).height ?? 0)
+            let newRows = (sample.newTextView.layoutManager?.usedRect(for: sample.newTextView.textContainer!).height ?? 0)
+            check(abs(oldRows - newRows) < 2, "Diff: side-by-side texts stay line-aligned (\(Int(oldRows)) / \(Int(newRows)) pt)")
+            sample.layout = .inline
+            await wait(0.3)
+            await snapshot(w, name: "diff-inline")
+        }
+        sample.close()
+
+        // DOCX and PDF of the same Markdown differ by at most a few words when formatting is ignored
+        let markdown = "# Annual Report\n\nThe first paragraph describes the **main** results of the year in plain words.\n\nA second paragraph with *emphasis* and a list:\n\n- first item\n- second item\n\nThe final sentence closes the report.\n"
+        let docxURL = dir.appendingPathComponent("same.docx"), pdfURL = dir.appendingPathComponent("same.pdf")
+        do {
+            let options = Settings.shared.exportOptions(title: "Annual Report", baseURL: nil)
+            try DocxExporter.data(markdown: markdown, options: options).write(to: docxURL)
+            try await PDFExporter.writePDF(markdown: markdown, options: options, to: pdfURL)
+            let docxText = try await DiffWindowController.text(ofFileAt: docxURL)
+            let pdfText = try await DiffWindowController.text(ofFileAt: pdfURL)
+            let formats = DiffWindowController(oldTitle: "same.docx", old: docxText, newTitle: "same.pdf", new: pdfText)
+            formats.ignoreWhitespace = true; formats.ignoreCase = false; formats.ignoreFormatting = true
+            await formats.recompute()
+            let changed = (formats.result?.insertedWords ?? 99) + (formats.result?.deletedWords ?? 99)
+            check(changed <= 3, "Diff: DOCX vs PDF of the same Markdown, ignoring formatting: \(changed) changed words")
+            if changed > 3, let r = formats.result { log.append("     " + TextDiff.criticMarkup(r.segments).replacingOccurrences(of: "\n", with: "⏎")) }
+            formats.close()
+        } catch {
+            check(false, "Diff: DOCX vs PDF: \(error.localizedDescription)")
+        }
+
+        // 200 000 characters per side: the diff runs in the background
+        var rng = SystemRandomNumberGenerator()
+        let words = ["alpha", "beta", "gamma", "delta", "review", "paper", "result", "method", "sample", "data"]
+        var oldLines: [String] = [], newLines: [String] = []
+        var size = 0
+        while size < 200_000 {
+            let line = (0..<12).map { _ in words.randomElement(using: &rng)! }.joined(separator: " ")
+            oldLines.append(line)
+            newLines.append(Int.random(in: 0..<20, using: &rng) == 0 ? line.replacingOccurrences(of: "data", with: "evidence") : line)
+            size += line.count + 1
+        }
+        let big = DiffWindowController(oldTitle: "big-old", old: oldLines.joined(separator: "\n"), newTitle: "big-new", new: newLines.joined(separator: "\n"))
+        big.ignoreWhitespace = false; big.ignoreCase = false; big.ignoreFormatting = false
+        big.layout = .sideBySide
+        big.showWindow(nil)
+        var ticks = 0
+        let timer = Timer(timeInterval: 0.01, repeats: true) { _ in ticks += 1 }
+        RunLoop.main.add(timer, forMode: .common)
+        let start = Date()
+        await big.recompute()
+        let elapsed = Date().timeIntervalSince(start)
+        timer.invalidate()
+        check(ticks > 0 && (big.result?.insertedWords ?? 0) > 0,
+              "Diff: 200 000 characters compared in \(String(format: "%.2f", elapsed)) s while the main thread kept running (\(ticks) timer ticks)")
+        big.close()
+    }
+
     static var screenUnavailable: Bool {
         if CGDisplayIsAsleep(CGMainDisplayID()) != 0 { return true }
         let session = CGSessionCopyCurrentDictionary() as? [String: Any]

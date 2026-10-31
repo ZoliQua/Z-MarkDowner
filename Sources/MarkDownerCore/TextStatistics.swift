@@ -67,6 +67,38 @@ public struct TextStatistics: Equatable {
         self = stats
     }
 
+    /// Visible text of a Markdown document without its markup, one paragraph (heading, list item, table cell,
+    /// caption, code line) per line; used to compare documents while ignoring formatting.
+    public static func proseText(of markdown: String) -> String {
+        let document = MDDocument(markdown: markdown)
+        var lines: [String] = []
+        func add(_ inlines: [MDInline]) {
+            let text = prose(inlines).split(whereSeparator: { $0.isNewline }).joined(separator: " ")
+                .trimmingCharacters(in: .whitespaces)
+            if !text.isEmpty { lines.append(text) }
+        }
+        func visit(_ blocks: [MDBlock]) {
+            for block in blocks {
+                switch block {
+                case .heading(_, let content, _), .paragraph(let content): add(content)
+                case .blockquote(let inner): visit(inner)
+                case .list(let list): list.items.forEach { visit($0.blocks) }
+                case .table(let table): (table.header + table.rows.flatMap { $0 }).forEach(add)
+                case .figure(let figure):
+                    if case .table = figure.content { visit([figure.content]) }
+                    add(figure.caption)
+                case .codeBlock(_, let code), .mathBlock(let code):
+                    lines += code.split(whereSeparator: { $0.isNewline }).map { $0.trimmingCharacters(in: .whitespaces) }
+                        .filter { !$0.isEmpty }
+                case .horizontalRule, .tableOfContents, .bibliography: break
+                }
+            }
+        }
+        visit(document.blocks)
+        for note in document.footnotes { visit(note.blocks) }
+        return lines.isEmpty ? "" : lines.joined(separator: "\n") + "\n"
+    }
+
     /// Visible text of inline content (links count by their text, deletions and comments not at all).
     static func prose(_ inlines: [MDInline]) -> String {
         inlines.map { node -> String in

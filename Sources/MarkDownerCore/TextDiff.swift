@@ -55,8 +55,8 @@ public enum TextDiff {
         while i < ops.count {
             if ops[i] == .equal {
                 append(&segments, DiffSegment(kind: .equal, text: newLines[ni]))
-                let text = stripNewline(newLines[ni])
-                rows.append(DiffRow(old: [DiffSegment(kind: .equal, text: text)], new: [DiffSegment(kind: .equal, text: text)],
+                rows.append(DiffRow(old: [DiffSegment(kind: .equal, text: stripNewline(oldLines[oi]))],
+                                    new: [DiffSegment(kind: .equal, text: stripNewline(newLines[ni]))],
                                     oldLine: oi, newLine: ni))
                 oi += 1; ni += 1; i += 1
                 continue
@@ -168,7 +168,8 @@ public enum TextDiff {
         }
     }
 
-    private static func wordDiff(_ old: String, _ new: String, _ o: DiffOptions) -> [DiffSegment] {
+    /// Word diff of two texts; equal tokens carry the new text, or the old text when `oldSide` is set.
+    private static func wordDiff(_ old: String, _ new: String, _ o: DiffOptions, oldSide: Bool = false) -> [DiffSegment] {
         let ot = tokens(old), nt = tokens(new)
         func key(_ t: String) -> String {
             var k = t
@@ -189,7 +190,7 @@ public enum TextDiff {
             switch op {
             case .equal:
                 flush()
-                append(&segments, DiffSegment(kind: .equal, text: nt[ni]))
+                append(&segments, DiffSegment(kind: .equal, text: oldSide ? ot[oi] : nt[ni]))
                 oi += 1; ni += 1
             case .delete:
                 pendingDel += ot[oi]; oi += 1
@@ -203,19 +204,16 @@ public enum TextDiff {
 
     private static func appendRows(_ rows: inout [DiffRow], _ oBlock: [String], _ nBlock: [String],
                                    _ oStart: Int, _ nStart: Int, _ blockSegments: [DiffSegment], _ o: DiffOptions) {
-        let paired = min(oBlock.count, nBlock.count)
-        for k in 0..<max(oBlock.count, nBlock.count) {
-            let oldText = k < oBlock.count ? stripNewline(oBlock[k]) : nil
-            let newText = k < nBlock.count ? stripNewline(nBlock[k]) : nil
-            var row = DiffRow(oldLine: oldText == nil ? nil : oStart + k, newLine: newText == nil ? nil : nStart + k)
-            if k < paired {
-                let segs: [DiffSegment]
-                if oBlock.count == 1 && nBlock.count == 1 {
-                    segs = trimTrailingNewline(blockSegments)
-                } else {
-                    segs = wordDiff(oldText!, newText!, o)
-                }
-                row.old = segs.filter { $0.kind != .insert }
+        let single = oBlock.count == 1 && nBlock.count == 1
+        for (ok, nk) in pairLines(oBlock, nBlock, o) {
+            let oldText = ok.map { stripNewline(oBlock[$0]) }
+            let newText = nk.map { stripNewline(nBlock[$0]) }
+            var row = DiffRow(oldLine: ok.map { oStart + $0 }, newLine: nk.map { nStart + $0 })
+            if let oldText, let newText {
+                let segs = single ? trimTrailingNewline(blockSegments) : wordDiff(oldText, newText, o)
+                let ignoring = o.ignoreCase || o.ignoreWhitespace
+                let oldSegs = ignoring ? wordDiff(oldText, newText, o, oldSide: true) : segs
+                row.old = oldSegs.filter { $0.kind != .insert }
                 row.new = segs.filter { $0.kind != .delete }
             } else if let t = oldText {
                 row.old = t.isEmpty ? [] : [DiffSegment(kind: .delete, text: t)]
@@ -224,6 +222,68 @@ public enum TextDiff {
             }
             rows.append(row)
         }
+    }
+
+    /// Side-by-side pairing of the lines of a changed block: similar lines (shared words) are aligned in order,
+    /// the lines left between two aligned pairs are paired in order and the rest get padding.
+    /// Large blocks are paired in order only.
+    private static func pairLines(_ oBlock: [String], _ nBlock: [String], _ o: DiffOptions) -> [(Int?, Int?)] {
+        let n = oBlock.count, m = nBlock.count
+        func inOrder(_ oRange: Range<Int>, _ nRange: Range<Int>) -> [(Int?, Int?)] {
+            (0..<max(oRange.count, nRange.count)).map { k in
+                (k < oRange.count ? oRange.lowerBound + k : nil, k < nRange.count ? nRange.lowerBound + k : nil)
+            }
+        }
+        guard n > 1 || m > 1, n > 0, m > 0, n * m <= 40_000 else { return inOrder(0..<n, 0..<m) }
+
+        func words(_ line: String) -> [String: Int] {
+            var counts: [String: Int] = [:]
+            for t in tokens(o.ignoreCase ? line.lowercased() : line) where isWord(t) { counts[t, default: 0] += 1 }
+            return counts
+        }
+        let ow = oBlock.map(words), nw = nBlock.map(words)
+        func similarity(_ i: Int, _ j: Int) -> Double {
+            let a = ow[i], b = nw[j]
+            if a.isEmpty || b.isEmpty {
+                let blankA = oBlock[i].allSatisfy(\.isWhitespace), blankB = nBlock[j].allSatisfy(\.isWhitespace)
+                return a.isEmpty && b.isEmpty && blankA == blankB ? 1 : 0
+            }
+            let common = a.reduce(0) { $0 + min($1.value, b[$1.key] ?? 0) }
+            let total = a.values.reduce(0, +) + b.values.reduce(0, +)
+            return 2 * Double(common) / Double(total)
+        }
+        let threshold = 0.3
+        var score = [[Double]](repeating: [Double](repeating: 0, count: m + 1), count: n + 1)
+        var sims = [[Double]](repeating: [Double](repeating: 0, count: m), count: n)
+        for i in 0..<n {
+            for j in 0..<m {
+                let sim = similarity(i, j)
+                sims[i][j] = sim
+                var best = max(score[i][j + 1], score[i + 1][j])
+                if sim >= threshold { best = max(best, score[i][j] + sim) }
+                score[i + 1][j + 1] = best
+            }
+        }
+        var anchors: [(Int, Int)] = []
+        var i = n, j = m
+        while i > 0, j > 0 {
+            if sims[i - 1][j - 1] >= threshold, score[i][j] == score[i - 1][j - 1] + sims[i - 1][j - 1] {
+                anchors.append((i - 1, j - 1)); i -= 1; j -= 1
+            } else if score[i][j] == score[i - 1][j] {
+                i -= 1
+            } else {
+                j -= 1
+            }
+        }
+        var result: [(Int?, Int?)] = []
+        var oi = 0, ni = 0
+        for (a, b) in anchors.reversed() {
+            result += inOrder(oi..<a, ni..<b)
+            result.append((a, b))
+            oi = a + 1; ni = b + 1
+        }
+        result += inOrder(oi..<n, ni..<m)
+        return result
     }
 
     /// Removes one trailing line terminator from each side of a word diff of a single line pair.

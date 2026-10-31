@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 import MarkDownerCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -65,6 +66,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSDocumentController.shared.openDocument(sender)
     }
 
+    /// Compares two files of any importable type (the older one is the old version).
+    @objc func compareDocuments(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = (DocumentImporter.supportedExtensions.union(["tex", "ltx"]))
+            .sorted().compactMap { UTType(filenameExtension: $0) }
+        panel.message = L("compare.chooseTwo", "Choose two documents to compare (or the old version first).")
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        var urls = Array(panel.urls.prefix(2))
+        if urls.count == 1 {
+            panel.allowsMultipleSelection = false
+            panel.message = L("compare.chooseNew", "Choose the new version.")
+            guard panel.runModal() == .OK, let second = panel.url else { return }
+            urls.append(second)
+        } else {
+            func date(_ url: URL) -> Date {
+                (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            }
+            urls.sort { date($0) < date($1) }
+        }
+        let (oldURL, newURL) = (urls[0], urls[1])
+        Task { @MainActor in
+            do {
+                let old = try await DiffWindowController.text(ofFileAt: oldURL)
+                let new = try await DiffWindowController.text(ofFileAt: newURL)
+                let latex = [oldURL, newURL].contains { SourceFormat(fileExtension: $0.pathExtension) == .latex }
+                DiffWindowController.show(oldTitle: oldURL.lastPathComponent, old: old, newTitle: newURL.lastPathComponent, new: new,
+                                          allowsReviewMarks: !latex, baseURL: newURL.deletingLastPathComponent())
+            } catch {
+                NSAlert(error: error).runModal()
+            }
+        }
+    }
+
     @objc func showMarkdownHelp(_ sender: Any?) {
         let doc = MarkdownDocument()
         doc.text = MarkdownHelp.text
@@ -111,6 +147,13 @@ enum MainMenu {
         file.addItem(withTitle: L("menu.openRecent", "Open Recent"), action: nil, keyEquivalent: "").submenu = recent
         file.addItem(item(L("menu.import", "Import (DOCX, DOC, RTF, TXT, MD)…"), #selector(AppDelegate.importDocument(_:)), "i", [.command, .shift]))
         file.addItem(withTitle: L("menu.batch", "Batch Convert…"), action: #selector(AppDelegate.showBatchConvert(_:)), keyEquivalent: "")
+        file.addItem(.separator())
+        file.addItem(withTitle: L("menu.compareDocuments", "Compare Documents…"), action: #selector(AppDelegate.compareDocuments(_:)), keyEquivalent: "")
+        let compare = NSMenu(title: L("menu.compareWith", "Compare With"))
+        compare.addItem(withTitle: L("menu.lastSaved", "Last Saved Version"), action: #selector(W.compareWithSaved(_:)), keyEquivalent: "")
+        compare.addItem(withTitle: L("menu.earlierVersion", "Earlier Version…"), action: #selector(W.compareWithVersion(_:)), keyEquivalent: "")
+        compare.addItem(withTitle: L("menu.clipboard", "Clipboard"), action: #selector(W.compareWithClipboard(_:)), keyEquivalent: "")
+        file.addItem(withTitle: L("menu.compareWith", "Compare With"), action: nil, keyEquivalent: "").submenu = compare
         file.addItem(.separator())
         file.addItem(withTitle: L("menu.importReview", "Import Review Comments from PDF…"), action: #selector(W.importReviewComments(_:)), keyEquivalent: "")
         file.addItem(withTitle: L("menu.exportResponse", "Export Response to Reviewers…"), action: #selector(W.exportResponseLetter(_:)), keyEquivalent: "")
