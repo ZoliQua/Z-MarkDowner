@@ -1,4 +1,5 @@
 import AppKit
+import MarkDownerCore
 
 extension NSAttributedString.Key {
     /// Markdown markup that live formatting hides outside the line being edited.
@@ -13,8 +14,11 @@ extension NSAttributedString.Key {
     static let zmdQuote = NSAttributedString.Key("zmdQuote")
 }
 
-/// Applies Markdown syntax highlighting to the editor's text storage.
+/// Applies Markdown (or LaTeX) syntax highlighting to the editor's text storage.
 final class MarkdownHighlighter {
+
+    /// Source language: `.latex` uses the LaTeX rules, anything else the Markdown rules.
+    var format: SourceFormat = .markdown
 
     private(set) var baseFont: NSFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
     private var italicFont: NSFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
@@ -102,6 +106,12 @@ final class MarkdownHighlighter {
     private static let footnoteRef = re(#"\[\^([^\]\s]+)\](?!:)"#)
     private static let autolinkBrackets = re(#"<([a-zA-Z][a-zA-Z0-9+.\-]*:[^>\s]+)>"#)
 
+    private static let latexComment = re(#"(?<!\\)%.*$"#)
+    private static let latexMath = re(#"\$\$[\s\S]*?\$\$|(?<!\\)\$(?:[^$\\]|\\[\s\S])+?\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]"#, [])
+    private static let latexCommand = re(#"\\(?:[A-Za-z@]+\*?|.)"#, [])
+    private static let latexBrace = re(#"[{}\[\]]"#, [])
+    private static let latexHeading = re(#"\\(?:part|chapter|section|subsection|subsubsection)\*?\{[^}\n]*\}"#, [])
+
     // MARK: Highlighting
 
     /// Highlights the whole document.
@@ -150,6 +160,10 @@ final class MarkdownHighlighter {
     }
 
     private func computeMultilineRanges(_ string: String) {
+        guard format != .latex else {
+            multilineRanges = []
+            return
+        }
         let full = NSRange(location: 0, length: (string as NSString).length)
         var ranges: [NSRange] = []
         if let fm = Self.frontMatter.firstMatch(in: string, range: full) { ranges.append(fm.range) }
@@ -160,6 +174,10 @@ final class MarkdownHighlighter {
 
     private func apply(_ storage: NSTextStorage, in region: NSRange, partial: Bool = false) {
         guard region.length > 0 else { return }
+        if format == .latex {
+            applyLatex(storage, in: region, partial: partial)
+            return
+        }
         let string = storage.string
         let text = string as NSString
 
@@ -375,6 +393,43 @@ final class MarkdownHighlighter {
             noSpell.append(m.range)
         }
 
+        storage.endEditing()
+        noSpellRanges = noSpell
+    }
+
+    /// LaTeX: `%` comments, math, `\commands`, braces and sectioning headings; commands and math are
+    /// not spell checked.
+    private func applyLatex(_ storage: NSTextStorage, in region: NSRange, partial: Bool) {
+        let string = storage.string
+        storage.beginEditing()
+        storage.setAttributes(baseAttributes, range: region)
+        var protected: [NSRange] = []
+        var noSpell: [NSRange] = partial ? noSpellRanges : []
+        func matches(_ regex: NSRegularExpression) -> [NSTextCheckingResult] {
+            regex.matches(in: string, range: region).filter { m in
+                !protected.contains { NSIntersectionRange($0, m.range).length > 0 }
+            }
+        }
+        let bold = NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
+        for m in matches(Self.latexHeading) {
+            storage.addAttribute(.font, value: bold, range: m.range)
+        }
+        for m in matches(Self.latexComment) {
+            storage.addAttributes([.foregroundColor: NSColor.secondaryLabelColor, .font: italicFont], range: m.range)
+            protected.append(m.range)
+        }
+        for m in matches(Self.latexMath) {
+            storage.addAttribute(.foregroundColor, value: NSColor.systemPurple, range: m.range)
+            protected.append(m.range)
+            noSpell.append(m.range)
+        }
+        for m in matches(Self.latexCommand) {
+            storage.addAttribute(.foregroundColor, value: NSColor.controlAccentColor, range: m.range)
+            noSpell.append(m.range)
+        }
+        for m in matches(Self.latexBrace) {
+            storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: m.range)
+        }
         storage.endEditing()
         noSpellRanges = noSpell
     }

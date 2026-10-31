@@ -40,6 +40,15 @@ final class EditorTextView: NSTextView {
         window?.windowController?.document as? MarkdownDocument
     }
 
+    /// Markdown formatting and insert commands are disabled in LaTeX documents.
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if let action = item.action, DocumentWindowController.formattingSelectors.contains(action),
+           markdownDocument?.sourceFormat == .latex {
+            return false
+        }
+        return super.validateUserInterfaceItem(item)
+    }
+
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         updateInsets()

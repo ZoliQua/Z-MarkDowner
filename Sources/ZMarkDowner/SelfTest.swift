@@ -70,6 +70,7 @@ final class SelfTest {
         await importAll()
         await editingAndViews()
         await scholarlyAndWriting()
+        await latexSources()
         await finish()
     }
 
@@ -612,6 +613,59 @@ final class SelfTest {
             check(false, "Open Word document with changes")
         }
         doc.updateChangeCount(.changeCleared)
+    }
+
+    // MARK: 4. LaTeX sources
+
+    /// `.tex` files open as text documents with LaTeX highlighting and are saved back unchanged.
+    private func latexSources() async {
+        let dir = output.appendingPathComponent("latex", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("sample.tex")
+        let source = "\\section{Intro}\nText with \\textit{italic} % comment\n"
+        let liveBefore = Settings.shared.liveFormatting
+        Settings.shared.liveFormatting = true
+        defer { Settings.shared.liveFormatting = liveBefore }
+        do {
+            try source.write(to: url, atomically: true, encoding: .utf8)
+            let (opened, _) = try await NSDocumentController.shared.openDocument(withContentsOf: url, display: true)
+            guard let doc = opened as? MarkdownDocument, let wc = doc.windowController, let editor = wc.editor,
+                  let storage = editor.textStorage, let window = wc.window else {
+                check(false, "LaTeX: sample.tex did not open as a text document")
+                return
+            }
+            activeWindow = window
+            check(doc.sourceFormat == .latex && doc.fileURL == url, "LaTeX: sample.tex opens in place as LaTeX (type \(doc.fileType ?? "-"))")
+            check(doc.text == source && editor.string == source, "LaTeX: text read unchanged")
+            check(wc.mode == .editor, "LaTeX: window starts in editor view")
+            let text = source as NSString
+            let comment = storage.attribute(.foregroundColor, at: text.range(of: "% comment").location + 2, effectiveRange: nil) as? NSColor
+            check(comment != nil && comment != NSColor.textColor, "LaTeX: % comment highlighted")
+            let command = storage.attribute(.foregroundColor, at: text.range(of: "\\textit").location + 1, effectiveRange: nil) as? NSColor
+            check(command != nil && command != NSColor.textColor, "LaTeX: \\commands highlighted")
+            check(!editor.liveFormatting, "LaTeX: live formatting stays off")
+            let bold = NSMenuItem(title: "Bold", action: #selector(EditorTextView.formatBold(_:)), keyEquivalent: "")
+            check(!editor.validateUserInterfaceItem(bold), "LaTeX: Markdown formatting commands disabled")
+            check(wc.sidebar.headings.map(\.text) == ["Intro"], "LaTeX: outline lists \\section headings (\(wc.sidebar.headings.map(\.text)))")
+            check(doc.writableTypes(for: .saveAsOperation).allSatisfy { doc.fileNameExtension(forType: $0, saveOperation: .saveAsOperation) == "tex" },
+                  "LaTeX: Save As keeps the .tex extension")
+
+            wc.setMode(.split)
+            let previewed = await waitFor(5) {
+                let html = await js(window, "document.getElementById('content').innerHTML") as? String ?? ""
+                return html.contains("<pre") && html.contains("\\section{Intro}")
+            }
+            check(previewed, "LaTeX: preview shows the source as plain text")
+
+            editor.setSelectedRange(NSRange(location: text.length, length: 0))
+            editor.insertText("More $x^2$ text.\n", replacementRange: editor.selectedRange())
+            try await doc.save(to: url, ofType: doc.fileType ?? DocumentTypes.latex, for: .saveOperation)
+            let saved = try String(contentsOf: url, encoding: .utf8)
+            check(doc.fileURL == url && saved == source + "More $x^2$ text.\n", "LaTeX: edit and save keep .tex and the exact content")
+            doc.close()
+        } catch {
+            check(false, "LaTeX: \(error.localizedDescription)")
+        }
     }
 
     /// Closes the current undo group the way the end of a key event would.

@@ -5,6 +5,9 @@ import MarkDownerCore
 enum DocumentTypes {
     static let markdown = "net.daringfireball.markdown"
     static let plainText = "public.plain-text"
+    /// LaTeX source. Systems with a TeX distribution report `.tex` / `.ltx` files as `org.tug.tex` / `org.tug.ltx`.
+    static let latex = "org.tug"
+    static let latexTypes: Set<String> = [latex, "org.tug.tex", "org.tug.ltx", "org.tug.tex.latex"]
 
     /// Types that are converted to Markdown when opened (never written back in their own format).
     static let importOnly: Set<String> = [
@@ -27,8 +30,12 @@ final class MarkdownDocument: NSDocument {
         windowControllers.first as? DocumentWindowController
     }
 
-    /// Plain text documents are saved back as .txt; everything else as Markdown.
-    private var isPlainText = false
+    /// Format of the source on disk: plain text is saved back as .txt, LaTeX as .tex (unchanged),
+    /// everything else as Markdown.
+    private(set) var sourceFormat: SourceFormat = .markdown
+
+    /// The type a LaTeX file was opened with (saved back with the same type).
+    private var latexTypeName = DocumentTypes.latex
 
     override init() {
         super.init()
@@ -41,7 +48,7 @@ final class MarkdownDocument: NSDocument {
         super.init()
         try read(from: url, ofType: typeName)
         importedFrom = url
-        isPlainText = false
+        sourceFormat = .markdown
         fileType = DocumentTypes.markdown
         updateChangeCount(.changeDone)
     }
@@ -75,10 +82,20 @@ final class MarkdownDocument: NSDocument {
     // MARK: Reading & writing
 
     override func read(from url: URL, ofType typeName: String) throws {
-        text = try DocumentImporter.markdown(fromFileAt: url)
-        pendingImportWarnings = DocumentImporter.lastImportWarnings
-        showPendingImportWarnings()
-        isPlainText = typeName == DocumentTypes.plainText
+        if DocumentTypes.isLatex(typeName, url: url) {
+            do {
+                text = DocumentImporter.decodeText(try Data(contentsOf: url))
+            } catch {
+                throw ImportError.unreadable(url.lastPathComponent, underlying: error)
+            }
+            sourceFormat = .latex
+            latexTypeName = typeName
+        } else {
+            text = try DocumentImporter.markdown(fromFileAt: url)
+            pendingImportWarnings = DocumentImporter.lastImportWarnings
+            showPendingImportWarnings()
+            sourceFormat = typeName == DocumentTypes.plainText ? .plain : .markdown
+        }
         windowController?.documentTextDidChangeExternally()
     }
 
@@ -91,12 +108,19 @@ final class MarkdownDocument: NSDocument {
 
     override func writableTypes(for saveOperation: NSDocument.SaveOperationType) -> [String] {
         // Note: must not read `fileType` here (NSDocument derives a default fileType from this method)
-        if isPlainText { return [DocumentTypes.plainText, DocumentTypes.markdown] }
-        return [DocumentTypes.markdown]
+        switch sourceFormat {
+        case .latex: return [latexTypeName]
+        case .plain: return [DocumentTypes.plainText, DocumentTypes.markdown]
+        case .markdown: return [DocumentTypes.markdown]
+        }
     }
 
     override func fileNameExtension(forType typeName: String, saveOperation: NSDocument.SaveOperationType) -> String? {
-        typeName == DocumentTypes.plainText ? "txt" : "md"
+        if sourceFormat == .latex {
+            let ext = fileURL?.pathExtension.lowercased() ?? ""
+            return SourceFormat(fileExtension: ext) == .latex ? ext : "tex"
+        }
+        return typeName == DocumentTypes.plainText ? "txt" : "md"
     }
 
     override var shouldRunSavePanelWithAccessoryView: Bool { false }
@@ -128,8 +152,13 @@ final class MarkdownDocument: NSDocument {
 }
 
 extension DocumentTypes {
+    /// LaTeX sources are recognised by type or, when the system reports plain text, by extension.
+    static func isLatex(_ typeName: String, url: URL) -> Bool {
+        latexTypes.contains(typeName) || SourceFormat(fileExtension: url.pathExtension) == .latex
+    }
+
     static func isEditableType(_ typeName: String, url: URL) -> Bool {
-        if typeName == markdown || typeName == plainText { return true }
+        if typeName == markdown || typeName == plainText || isLatex(typeName, url: url) { return true }
         guard let type = UTType(typeName) else {
             let ext = url.pathExtension.lowercased()
             return DocumentImporter.markdownExtensions.contains(ext) || DocumentImporter.plainTextExtensions.contains(ext)

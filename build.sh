@@ -90,6 +90,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
             <key>NSDocumentClass</key><string>MarkdownDocument</string>
         </dict>
         <dict>
+            <key>CFBundleTypeName</key><string>LaTeX document</string>
+            <key>CFBundleTypeRole</key><string>Editor</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key><array><string>org.tug</string><string>org.tug.tex</string><string>org.tug.ltx</string></array>
+            <key>NSDocumentClass</key><string>MarkdownDocument</string>
+        </dict>
+        <dict>
             <key>CFBundleTypeName</key><string>Plain text document</string>
             <key>CFBundleTypeRole</key><string>Editor</string>
             <key>LSHandlerRank</key><string>Alternate</string>
@@ -124,6 +131,16 @@ cat > "$APP/Contents/Info.plist" <<PLIST
                 <key>public.filename-extension</key>
                 <array><string>md</string><string>markdown</string><string>mdown</string><string>mkd</string><string>mkdn</string></array>
                 <key>public.mime-type</key><array><string>text/markdown</string></array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key><string>org.tug</string>
+            <key>UTTypeDescription</key><string>LaTeX document</string>
+            <key>UTTypeConformsTo</key><array><string>public.plain-text</string></array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key><array><string>tex</string><string>latex</string><string>ltx</string></array>
+                <key>public.mime-type</key><array><string>application/x-tex</string></array>
             </dict>
         </dict>
     </array>

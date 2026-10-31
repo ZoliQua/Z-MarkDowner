@@ -45,6 +45,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     var markdownDocument: MarkdownDocument? { (document as? MarkdownDocument) ?? ownerDocument }
 
+    /// LaTeX sources: Markdown-only features (live formatting, formatting commands, rendered preview) are off.
+    var isLatex: Bool { markdownDocument?.sourceFormat == .latex }
+
     init(document: MarkdownDocument) {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 800),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -61,7 +64,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
         buildToolbar()
         applySettings()
         loadDocumentText()
-        setMode(document.importedFrom != nil ? .split : Settings.shared.defaultViewMode, remember: false)
+        let initialMode: ViewMode = document.sourceFormat == .latex ? .editor
+            : document.importedFrom != nil ? .split : Settings.shared.defaultViewMode
+        setMode(initialMode, remember: false)
         setSidebarVisible(Settings.shared.showSidebar, remember: false)
         window.setFrameAutosaveName("ZMarkDownerDocumentWindow")
         if window.frame.origin == .zero { window.center() }
@@ -214,12 +219,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     private func applySettings() {
         let settings = Settings.shared
-        let fontKey = "\(settings.editorFontName)|\(settings.editorFontSize)|\(settings.liveFormatting)"
+        let live = settings.liveFormatting && !isLatex
+        let fontKey = "\(settings.editorFontName)|\(settings.editorFontSize)|\(live)"
         if fontKey != appliedFontKey {
             appliedFontKey = fontKey
-            highlighter.liveFormatting = settings.liveFormatting
+            highlighter.format = isLatex ? .latex : .markdown
+            highlighter.liveFormatting = live
             highlighter.updateFonts()
-            editor.liveFormatting = settings.liveFormatting
+            editor.liveFormatting = live
             rehighlight()
         }
         editor.readableWidth = settings.readableWidth
@@ -354,6 +361,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
     /// Parses the text once and updates the outline, statistics and (when visible) the preview.
     private func documentStructureChanged() {
         refreshLineStarts()
+        if isLatex {
+            latexStructureChanged()
+            return
+        }
         let doc = MDDocument(markdown: editor.string)
         sidebar.setHeadings(doc.outline.map { SidebarView.Heading(level: $0.level, text: $0.text, line: $0.line) })
         sidebar.highlightHeading(forLine: lineNumber(at: editor.selectedRange().location))
@@ -365,6 +376,38 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
             updateWarnings(result)
         }
         statistics = TextStatistics(document: doc)
+        if let last = lastWordCount, statistics.words > last {
+            WritingGoals.shared.record(statistics.words - last)
+        }
+        lastWordCount = statistics.words
+        updateStatus()
+        updateGoalDisplay()
+        statsController?.refresh()
+    }
+
+    private static let latexSection = try! NSRegularExpression(
+        pattern: #"^[ \t]*\\(section|subsection|subsubsection)\*?\{([^}\n]*)\}"#, options: [.anchorsMatchLines])
+
+    /// LaTeX: outline from `\section` / `\subsection` / `\subsubsection`, the preview shows the plain
+    /// source, statistics count the text; no Markdown processing.
+    private func latexStructureChanged() {
+        let text = editor.string
+        let levels = ["section": 1, "subsection": 2, "subsubsection": 3]
+        let headings = Self.latexSection.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length)).map { m in
+            SidebarView.Heading(level: levels[(text as NSString).substring(with: m.range(at: 1))] ?? 1,
+                                text: (text as NSString).substring(with: m.range(at: 2)),
+                                line: lineNumber(at: m.range.location))
+        }
+        sidebar.setHeadings(headings)
+        sidebar.highlightHeading(forLine: lineNumber(at: editor.selectedRange().location))
+        let doc = MDDocument(blocks: [.codeBlock(language: "latex", code: text)])
+        if mode != .editor {
+            preview.baseDirectory = markdownDocument?.baseDirectory
+            lastProcessing = nil
+            preview.update(document: doc)
+            warningLabel.stringValue = ""
+        }
+        statistics = TextStatistics(markdown: text)
         if let last = lastWordCount, statistics.words > last {
             WritingGoals.shared.record(statistics.words - last)
         }
@@ -652,14 +695,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     override func responds(to aSelector: Selector!) -> Bool {
         if let aSelector, Self.formattingSelectors.contains(aSelector) {
-            return mode != .preview
+            return mode != .preview && !isLatex
         }
         if let aSelector, Self.readOnlySelectors.contains(aSelector) { return true }
         return super.responds(to: aSelector)
     }
 
     override func forwardingTarget(for aSelector: Selector!) -> Any? {
-        if let aSelector, Self.formattingSelectors.contains(aSelector), mode != .preview {
+        if let aSelector, Self.formattingSelectors.contains(aSelector), mode != .preview, !isLatex {
             if window?.firstResponder !== editor { window?.makeFirstResponder(editor) }
             return editor
         }
@@ -682,8 +725,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTe
             menuItem.state = Settings.shared.typewriterMode ? .on : .off
             return mode != .preview
         case #selector(toggleLiveFormatting(_:)):
-            menuItem.state = Settings.shared.liveFormatting ? .on : .off
-            return mode != .preview
+            menuItem.state = Settings.shared.liveFormatting && !isLatex ? .on : .off
+            return mode != .preview && !isLatex
         case #selector(toggleNumberSections(_:)):
             menuItem.state = Settings.shared.numberSections ? .on : .off
         default: break
